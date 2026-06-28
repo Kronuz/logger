@@ -7,6 +7,23 @@ async-now / deferred-future), the `Logging` task, the `Log` handle with
 [ARCHITECTURE.md](ARCHITECTURE.md) for how it fits together. This is the part
 worth handing to a stranger.
 
+## Status
+
+Phases 1 through 5 are implemented and TSan-clean (see the git history): the sinks
+and immediate path, the three-path router, the cancel/swap deferred mechanism,
+hook-driven decoration, the bounded `once` filter, backpressure, the full `L_*`
+macro surface, a demo, and a test. **Phase 6 (the Xapiand back-port + adapter) is
+the remaining work.**
+
+The implementation went further on dependencies than the analysis below assumed:
+the core depends on **`scheduler` only**. The richer libs the tables call out
+(`located-exception`, `datetime`, `term-color`, real backtraces, named threads)
+are not pulled in; they reach the core through `LogHooks` with std defaults, so a
+consumer re-injects them. Colors use a small built-in palette, and `once` uses a
+bounded two-set filter rather than a vendored bloom, so neither `bloom_filter`
+nor `lazy.hh` was vendored. The tables below remain as the dependency analysis
+that informed those choices.
+
 ## Good news: most of the heavy dependencies are already Kronuz libs
 
 `extract-and-modernize` already consumes these via FetchContent, and the logger
@@ -56,20 +73,22 @@ thin Xapiand-side adapter.
 
 ## Steps
 
-1. New repo `Kronuz/logger`, consuming `Kronuz/scheduler` (which pulls
-   `threadpool` + `stash`) plus `term-color`, `located-exception`, `datetime`,
-   `hashes`, `base-x` via FetchContent.
-2. Lift `Logging` + `Log` + the sink interface + the three-path `add()` with the
-   already-extracted deps; stub `opts` with a `Config` and the three hooks at std
-   defaults.
-3. Port the macro surface (`L_*`, `L_DELAYED_*`, `unlog`) minus the Xapiand-only
-   hooks; keep colors via `term-color`.
-4. Replace `strings`/`io`/`repr` with `std::format`/`::write`/a tiny escape; vendor
-   `bloom_filter` and `lazy`.
-5. A demo and a test: arm-and-cancel, deferred-fires-if-not-cancelled, once-dedup,
-   single-consumer output ordering.
-6. Back-port: Xapiand consumes `Kronuz/logger` and provides the `Xapian::Error` +
-   iTerm2 + named-thread adapter.
+1. **Done.** New repo `Kronuz/logger`, consuming `Kronuz/scheduler` only (which
+   pulls `threadpool` + `stash`). The other libs were not needed: their roles
+   became hooks.
+2. **Done.** Lifted `Logging` + `Log` + the sink interface + the three-path
+   `add()`; replaced the global `opts` with `LogConfig` and added `LogHooks` at
+   std defaults.
+3. **Done.** Ported the macro surface (`L_*`, `L_DELAYED_*`, `unlog`). A
+   priority-guard ternary plus a variadic `format_msg` replaced the `LAZY` +
+   arg-counting machinery, so no `lazy.hh`. Colors use a small built-in palette,
+   not `term-color`.
+4. **Done.** `std::format` / `::write` / a linear `strip_colors`. The `once`
+   filter is a bounded two-set structure, so no `bloom_filter` vendoring.
+5. **Done.** A demo and a test (arm-and-cancel, deferred-fires, once-dedup,
+   single-consumer ordering, the macros), passing under Release and TSan.
+6. **Remaining.** Back-port: Xapiand consumes `Kronuz/logger` and provides the
+   `Xapian::Error` + iTerm2 + named-thread + real-backtrace adapter.
 
 ## Size
 

@@ -129,6 +129,11 @@ int main() {
 		L_WARNING("STACK_CHILD");                // nested one level deeper
 	}
 
+	// --- single-consumer ordered output ---------------------------------
+	for (int i = 0; i < 5; ++i) {
+		L_NOTICE("ORDER_{}", i);
+	}
+
 	std::this_thread::sleep_for(300ms);  // let async/deferred lines fire
 	Logging::finish();                   // drain + join the LOG thread
 
@@ -151,6 +156,17 @@ int main() {
 	CHECK(out.find("STACK_PARENT") != std::string::npos);
 	CHECK(out.find("  STACK_CHILD") != std::string::npos);       // indented one level
 	CHECK(out.find("  STACK_PARENT") == std::string::npos);      // parent not indented
+
+	// one consumer drains in order, so a single producer's lines stay ordered
+	size_t prev = 0;
+	for (int i = 0; i < 5; ++i) {
+		size_t p = out.find("ORDER_" + std::to_string(i));
+		CHECK(p != std::string::npos);
+		if (i > 0) {
+			CHECK(p > prev);
+		}
+		prev = p;
+	}
 	CHECK(out.find("FILLER_MARKER") == std::string::npos);       // far-future, never fired
 	CHECK(out.find("DROPME_MARKER") == std::string::npos);       // dropped under backpressure
 	CHECK(out.find("backpressure") != std::string::npos);        // drop summary emitted

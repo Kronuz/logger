@@ -31,4 +31,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_executable(logger_test test/test.cc)
   target_link_libraries(logger_test PRIVATE logger)
   add_test(NAME logger COMMAND logger_test)
+
+  add_executable(logger_demo examples/demo.cc)
+  target_link_libraries(logger_demo PRIVATE logger)
 endif()

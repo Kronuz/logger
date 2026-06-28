@@ -6,8 +6,10 @@ time-keyed work that a single thread drains, where most of the arming sits on a
 hot path and a lot of it is cancelled before it ever runs.
 
 This documents how the logger actually works, because the shape is a little
-different from what you would guess. It is also the design basis for pulling the
-logger out into its own Kronuz library (see [EXTRACTION.md](EXTRACTION.md)).
+different from what you would guess. It is the design this library implements; it
+mirrors the logger as it runs in Xapiand, with the host-specific parts (exception
+description, backtraces, named threads) moved behind hooks. The extraction plan
+and status are in [EXTRACTION.md](EXTRACTION.md).
 
 ## The three paths a log line can take
 
@@ -117,11 +119,15 @@ that it is the fastest possible. The deferred logs, meanwhile, spread across the
 future, which is exactly the pattern the wheel is built for, and the
 cancel-before-fire traffic costs almost nothing.
 
-## Where the pieces live in Xapiand today
+## Where the pieces live
 
-- `src/logger.h` / `src/logger.cc` — `Logging` (the task), the `Logger` sinks, the
-  `add` router, and `operator()` (the emit/decorate).
-- `src/logger_fwd.h` — the `Log` handle and the `L_*` macro surface (`L_WARNING`,
-  `L_DELAYED_*`, `unlog`, the lazy argument machinery).
-- `src/scheduler.h` — the stash-backed `Scheduler` whose one thread is the LOG
-  thread. Already extracted as [Kronuz/scheduler](https://github.com/Kronuz/scheduler).
+- `logger.h` — `LogConfig`, `LogHooks`, the `Logger` sinks, `Logging` (the task +
+  static facade), the `Log` handle, and the `L_*` macros. The macros use a
+  priority-guard ternary plus a variadic `format_msg`, so a filtered line
+  evaluates none of its arguments and no `lazy.hh` is needed.
+- `logger.cc` — the three-path `add` router, `operator()` (emit/decorate), the
+  cancel/swap in `clean`, the bounded `OnceFilter`, the default hooks, and
+  backpressure.
+- `scheduler.h` (from [Kronuz/scheduler](https://github.com/Kronuz/scheduler),
+  pulled via FetchContent) — the stash-backed `Scheduler` whose one thread is the
+  LOG thread.
