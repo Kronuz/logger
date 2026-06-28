@@ -53,13 +53,13 @@ filter.
 
 ## Contention and correctness
 
-### Per-thread indent uses a global lock and map
+### Per-thread indent uses a global lock and map — DONE (Phase 4)
 
-Stacked-indent depth is tracked in an `unordered_map<thread::id, unsigned>` under
-a shared mutex, touched on every stacked log construct and destruct. Indentation
-is inherently per-thread, so the shared map and its lock buy nothing but
-contention and map churn on a hot path. Make it `thread_local`: a plain per-thread
-counter, no map, no lock.
+The original tracked stacked-indent depth in an `unordered_map<thread::id,
+unsigned>` under a shared mutex, touched on every stacked log construct and
+destruct, all contention and map churn for something inherently per-thread. This
+extraction made it `thread_local` (`log_indent()` + the `LogIndent` RAII guard):
+a plain per-thread counter, captured into each line at creation, no map, no lock.
 
 ### Handlers and config are unsynchronized globals
 
@@ -87,6 +87,17 @@ the scheduler fires, plus written invariants.
 - **The Xapian/iTerm2/backtrace coupling becomes hooks.** Rather than special-case
   `Xapian::Error` and shell out to traceback in the core, those reach the core
   through hooks (Phase 3), so the library carries none of it.
+
+## Noted while wiring the macros
+
+- **Trace-stub macro clash.** stash and scheduler bundle no-op `L_*` stubs
+  (`L_EXC`, `L_NOTHING`, `L_DEBUG_HOOK`, `L_CALL`) so they build without a logger.
+  The logger's real `L_EXC` collides with the stub; the fix here is a local
+  `#undef L_EXC` before the real definition (which is also how Xapiand wires it,
+  so the scheduler's destructor `L_EXC` becomes a real log there too). Cleaner
+  upstream would be to guard those stubs with `#ifndef`, though include order
+  (logger.h pulls scheduler.h before defining its macros) means the consumer
+  still has to undef. Low priority; documented so it is not a surprise.
 
 ## Where these land
 

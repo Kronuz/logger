@@ -116,6 +116,19 @@ int main() {
 			std::exception_ptr{}, nullptr, nullptr, 0, "ONCE_MARKER");
 	}
 
+	// --- Phase 4: macro surface -----------------------------------------
+	L_WARNING("MACRO_WARNING {}", 7);  // async, std::format args
+	L_ERR("MACRO_ERR");
+	L_PRINT("MACRO_PRINT");            // immediate, undecorated
+	{
+		L_DELAYED_200("MACRO_DELAYED");
+		L_DELAYED_N_CLEAR();           // cancel before it fires -> silent
+	}
+	{
+		L_STACKED(LOG_WARNING, "STACK_PARENT");  // outer level
+		L_WARNING("STACK_CHILD");                // nested one level deeper
+	}
+
 	std::this_thread::sleep_for(300ms);  // let async/deferred lines fire
 	Logging::finish();                   // drain + join the LOG thread
 
@@ -131,6 +144,13 @@ int main() {
 	CHECK(out.find("EXC_MARKER") != std::string::npos);
 	CHECK(out.find("EXC_DETAIL") != std::string::npos);          // exception described
 	CHECK(count_occurrences(out, "ONCE_MARKER") == 1);           // deduped
+	CHECK(out.find("MACRO_WARNING 7") != std::string::npos);     // formatted args
+	CHECK(out.find("MACRO_ERR") != std::string::npos);
+	CHECK(out.find("MACRO_PRINT") != std::string::npos);
+	CHECK(out.find("MACRO_DELAYED") == std::string::npos);       // cancelled
+	CHECK(out.find("STACK_PARENT") != std::string::npos);
+	CHECK(out.find("  STACK_CHILD") != std::string::npos);       // indented one level
+	CHECK(out.find("  STACK_PARENT") == std::string::npos);      // parent not indented
 	CHECK(out.find("FILLER_MARKER") == std::string::npos);       // far-future, never fired
 	CHECK(out.find("DROPME_MARKER") == std::string::npos);       // dropped under backpressure
 	CHECK(out.find("backpressure") != std::string::npos);        // drop summary emitted

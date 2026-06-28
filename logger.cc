@@ -30,7 +30,6 @@
 #include <functional>      // for std::hash
 #include <mutex>           // for std::mutex, std::lock_guard
 #include <sstream>         // for std::ostringstream
-#include <stdexcept>       // for std::exception
 #include <system_error>   // for std::system_error
 #include <unordered_set>   // for std::unordered_set
 #include <unistd.h>        // for write, isatty, close, STDERR_FILENO
@@ -43,6 +42,16 @@ LogHooks Logging::hooks;
 std::vector<std::unique_ptr<Logger>> Logging::handlers;
 std::atomic<long> Logging::pending{0};
 std::atomic<long> Logging::dropped{0};
+
+
+// Thread-local stacked-indent depth. Per-thread by construction, so it needs no
+// lock and no shared map (unlike the original's mutex-guarded thread_id map).
+int&
+log_indent() noexcept
+{
+	thread_local int depth = 0;
+	return depth;
+}
 
 
 // One marker per syslog priority (LOG_EMERG=0 .. LOG_DEBUG=7), plus a blank
@@ -302,6 +311,7 @@ Logging::Logging(std::string&& str_, bool clears_, bool async_, bool info_, uint
 	  function(function_),
 	  filename(filename_),
 	  line(line_),
+	  indent(log_indent()),
 	  scheduled(false),
 	  timestamp(timestamp_),
 	  atom_cleaned_at(std::chrono::steady_clock::time_point{}),
@@ -446,6 +456,9 @@ Logging::operator()()
 		}
 	}
 
+	if (indent > 0) {
+		msg.append(static_cast<size_t>(indent) * 2, ' ');
+	}
 	msg += str;
 
 	if (eptr) {
