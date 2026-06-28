@@ -24,9 +24,13 @@
 
 #include <atomic>        // for std::atomic
 #include <chrono>        // for steady_clock, system_clock, time_point
+#include <cstdint>       // for uint64_t
+#include <exception>     // for std::exception_ptr
+#include <functional>    // for std::function
 #include <memory>        // for std::unique_ptr, std::shared_ptr
 #include <string>        // for std::string
 #include <string_view>   // for std::string_view
+#include <thread>        // for std::thread::id
 #include <vector>        // for std::vector
 #include <syslog.h>      // for LOG_WARNING, LOG_ERR, LOG_DEBUG, ...
 
@@ -37,12 +41,29 @@
 #define MAX_LOG_PRIORITY  (LOG_DEBUG + 1)   // highest formatted level (+1 = verbose)
 
 
-// Runtime configuration. Replaces Xapiand's global `opts`; later phases grow
-// this with more format toggles and the async cutoff.
+// Runtime configuration. Replaces Xapiand's global `opts`.
 struct LogConfig {
 	int log_level = DEFAULT_LOG_LEVEL;
 	bool colors = false;          // keep ANSI color in the output; false strips it
 	bool with_timestamp = true;   // prepend a timestamp in the decorated path
+	bool with_threads = false;    // prepend "(thread-name) "
+	bool with_location = false;   // prepend "file:line at function: "
+
+	// Backpressure. 0 = unbounded. Otherwise, once this many lines are pending on
+	// the wheel, routine async lines (NOTICE and below severity, non-deferred) are
+	// dropped instead of queued, and a coalesced "dropped N" summary is emitted.
+	// Severe and deferred lines are never dropped.
+	size_t max_pending = 0;
+};
+
+
+// Pluggable formatting, all optional. A host (e.g. Xapiand) injects richer
+// versions of these; left empty, the core uses std-only defaults.
+struct LogHooks {
+	std::function<std::string(std::exception_ptr)> describe_exception;            // default: std::exception::what()
+	std::function<std::string()> backtrace;                                       // default: empty
+	std::function<std::string(std::thread::id)> thread_name;                      // default: the thread id
+	std::function<std::string(std::chrono::system_clock::time_point)> timestamp;  // default: "YYYY-MM-DD HH:MM:SS.mmm"
 };
 
 
@@ -91,8 +112,7 @@ using LogType = std::shared_ptr<Logging>;
 
 // One log entry, and also a ScheduledTask so the async and deferred paths can
 // ride the scheduler's lock-free wheel. The scheduler's single "LOG" consumer
-// thread is the one that fires operator() and writes the line. See
-// ARCHITECTURE.md for the three paths a log can take.
+// thread fires operator() and writes the line. See ARCHITECTURE.md.
 class Logging : public ScheduledTask<Scheduler<Logging, ThreadPolicyType::logging>, Logging, ThreadPolicyType::logging> {
 	friend class Log;
 
@@ -100,10 +120,21 @@ class Logging : public ScheduledTask<Scheduler<Logging, ThreadPolicyType::loggin
 
 	static Scheduler<Logging, ThreadPolicyType::logging>& scheduler();
 
+	static std::atomic<long> pending;   // lines on the wheel (for backpressure)
+	static std::atomic<long> dropped;   // lines dropped under backpressure, not yet reported
+
 	std::string str;
 	int priority;
 	bool clears;        // cancel the scheduled line when the handle is cleaned
 	bool async;         // offloaded to the LOG thread (vs. inline on the caller)
+	bool info;          // decorate with timestamp / thread / location
+	uint64_t once;      // dedup token; 0 = no dedup
+	std::exception_ptr eptr;
+	std::thread::id thread_id;
+	const char* function;
+	const char* filename;
+	int line;
+	bool scheduled;     // was put on the wheel (so ~Logging decrements `pending`)
 	std::chrono::system_clock::time_point timestamp;
 	std::atomic<std::chrono::steady_clock::time_point> atom_cleaned_at;
 
@@ -114,17 +145,18 @@ class Logging : public ScheduledTask<Scheduler<Logging, ThreadPolicyType::loggin
 	Logging(const Logging&) = delete;
 	Logging& operator=(const Logging&) = delete;
 
-	// Build a Logging and route it: inline if it is due now and synchronous,
-	// otherwise onto the scheduler keyed at `wakeup`.
-	static Log add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bool clears, bool async, int priority,
+	static Log add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bool clears, bool async, bool info,
+		uint64_t once, int priority, std::exception_ptr eptr, const char* function, const char* filename, int line,
 		std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now(),
 		std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::now());
 
 public:
 	static LogConfig config;
+	static LogHooks hooks;
 	static std::vector<std::unique_ptr<Logger>> handlers;
 
-	Logging(std::string&& str, bool clears, bool async, int priority,
+	Logging(std::string&& str, bool clears, bool async, bool info, uint64_t once, int priority,
+		std::exception_ptr eptr, const char* function, const char* filename, int line,
 		std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now(),
 		std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::now());
 	~Logging() noexcept;
@@ -132,13 +164,20 @@ public:
 	// Low-level fan-out: write `str` to every handler now, on the calling thread.
 	static void log(int priority, std::string str, bool with_priority = true, bool with_endl = true);
 
-	// The public entry point. Renders nothing if priority is filtered out.
+	// Full entry point used by the macros. Renders nothing if priority is filtered.
+	static Log do_log(bool clears, std::chrono::steady_clock::time_point wakeup, bool async, bool info,
+		uint64_t once, int priority, std::exception_ptr eptr, const char* function, const char* filename, int line,
+		std::string&& str);
+
+	// Convenience entry point: a plain decorated line, no exception or location.
 	static Log do_log(bool clears, std::chrono::steady_clock::time_point wakeup, bool async, int priority, std::string&& str);
 
-	// Drain and stop the LOG thread. Call at shutdown before the statics tear
-	// down, or pending async lines can outlive their sinks.
+	// Drain and stop the LOG thread. Call at shutdown before the statics tear down.
 	static bool finish(int wait = 10);
 	static bool join(int timeout = 60000);
+
+	// Lines dropped under backpressure so far (observability / tests).
+	static long dropped_count() { return dropped.load(std::memory_order_relaxed); }
 
 	void vunlog(int priority, std::string&& str);
 	void clean();

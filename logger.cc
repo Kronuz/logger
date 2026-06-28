@@ -22,18 +22,27 @@
 
 #include "logger.h"
 
-#include <cerrno>        // for errno, EINTR
-#include <cstdio>        // for snprintf
-#include <ctime>         // for localtime_r, std::tm
-#include <fcntl.h>       // for open, O_WRONLY, O_CREAT, O_APPEND
-#include <system_error>  // for std::system_error
-#include <unistd.h>      // for write, isatty, close, STDERR_FILENO
+#include <cerrno>          // for errno, EINTR
+#include <cstdio>          // for snprintf
+#include <ctime>           // for localtime_r, std::tm
+#include <exception>       // for std::rethrow_exception
+#include <fcntl.h>         // for open, O_WRONLY, O_CREAT, O_APPEND
+#include <functional>      // for std::hash
+#include <mutex>           // for std::mutex, std::lock_guard
+#include <sstream>         // for std::ostringstream
+#include <stdexcept>       // for std::exception
+#include <system_error>   // for std::system_error
+#include <unordered_set>   // for std::unordered_set
+#include <unistd.h>        // for write, isatty, close, STDERR_FILENO
 
 using namespace std::chrono_literals;
 
 
 LogConfig Logging::config;
+LogHooks Logging::hooks;
 std::vector<std::unique_ptr<Logger>> Logging::handlers;
+std::atomic<long> Logging::pending{0};
+std::atomic<long> Logging::dropped{0};
 
 
 // One marker per syslog priority (LOG_EMERG=0 .. LOG_DEBUG=7), plus a blank
@@ -50,6 +59,38 @@ static const std::string priorities[MAX_LOG_PRIORITY + 1] = {
 	"\033[90m▏\033[0m",    // LOG_DEBUG   7
 	"",                    // verbose   > 7
 };
+
+
+// Bounded dedup for `once` lines. Two alternating sets: when the active set
+// fills, it becomes the "previous" set and a fresh active starts. Memory is
+// capped at ~2x the cap; the cost is that a key can re-emit once after it ages
+// out of both sets. That re-emission is a far better failure than the original's
+// forever-growing filter, which silently swallows first-time lines once it
+// saturates (see IMPROVEMENTS.md).
+namespace {
+class OnceFilter {
+	std::mutex mtx;
+	std::unordered_set<uint64_t> active;
+	std::unordered_set<uint64_t> previous;
+	size_t cap;
+
+public:
+	explicit OnceFilter(size_t cap_ = 8192) : cap(cap_) {}
+
+	bool seen_or_add(uint64_t key) {
+		std::lock_guard<std::mutex> lk(mtx);
+		if (active.count(key) != 0 || previous.count(key) != 0) {
+			return true;
+		}
+		if (active.size() >= cap) {
+			previous = std::move(active);
+			active.clear();
+		}
+		active.insert(key);
+		return false;
+	}
+};
+}  // namespace
 
 
 static int
@@ -128,8 +169,8 @@ render(int priority, std::string_view str, bool with_priority, bool with_endl, b
 }
 
 
-// Default timestamp decoration: "YYYY-MM-DD HH:MM:SS.mmm ". A later phase makes
-// this an injectable hook so a host can match its own format.
+// --- default hook implementations ---------------------------------------
+
 static std::string
 default_timestamp(std::chrono::system_clock::time_point tp)
 {
@@ -145,6 +186,41 @@ default_timestamp(std::chrono::system_clock::time_point tp)
 	return buf;
 }
 
+static std::string
+default_thread_name(std::thread::id id)
+{
+	std::ostringstream os;
+	os << id;
+	return os.str();
+}
+
+static std::string
+default_describe_exception(std::exception_ptr e)
+{
+	if (!e) {
+		return {};
+	}
+	try {
+		std::rethrow_exception(e);
+	} catch (const std::exception& ex) {
+		return ex.what();
+	} catch (...) {
+		return "unknown exception";
+	}
+}
+
+static std::string hooked_timestamp(std::chrono::system_clock::time_point tp) {
+	return Logging::hooks.timestamp ? Logging::hooks.timestamp(tp) : default_timestamp(tp);
+}
+static std::string hooked_thread_name(std::thread::id id) {
+	return Logging::hooks.thread_name ? Logging::hooks.thread_name(id) : default_thread_name(id);
+}
+static std::string hooked_describe_exception(std::exception_ptr e) {
+	return Logging::hooks.describe_exception ? Logging::hooks.describe_exception(e) : default_describe_exception(e);
+}
+static std::string hooked_backtrace() {
+	return Logging::hooks.backtrace ? Logging::hooks.backtrace() : std::string();
+}
 
 // Compact age annotation for a slow async/deferred line.
 static std::string
@@ -156,6 +232,8 @@ format_delta(std::chrono::nanoseconds ns)
 	return buf;
 }
 
+
+// --- sinks ---------------------------------------------------------------
 
 StreamLogger::StreamLogger(const char* filename)
 	: fdout(::open(filename, O_WRONLY | O_CREAT | O_APPEND, 0644))
@@ -208,7 +286,8 @@ SysLog::log(int priority, std::string_view str, bool with_priority, bool /*with_
 
 // --- Logging -------------------------------------------------------------
 
-Logging::Logging(std::string&& str_, bool clears_, bool async_, int priority_,
+Logging::Logging(std::string&& str_, bool clears_, bool async_, bool info_, uint64_t once_, int priority_,
+		std::exception_ptr eptr_, const char* function_, const char* filename_, int line_,
 		std::chrono::steady_clock::time_point created_at,
 		std::chrono::system_clock::time_point timestamp_)
 	: Base(created_at),
@@ -216,6 +295,14 @@ Logging::Logging(std::string&& str_, bool clears_, bool async_, int priority_,
 	  priority(priority_),
 	  clears(clears_),
 	  async(async_),
+	  info(info_),
+	  once(once_),
+	  eptr(std::move(eptr_)),
+	  thread_id(std::this_thread::get_id()),
+	  function(function_),
+	  filename(filename_),
+	  line(line_),
+	  scheduled(false),
 	  timestamp(timestamp_),
 	  atom_cleaned_at(std::chrono::steady_clock::time_point{}),
 	  unlog_priority(0)
@@ -227,6 +314,9 @@ Logging::~Logging() noexcept
 	try {
 		clean();
 	} catch (...) {
+	}
+	if (scheduled) {
+		pending.fetch_sub(1, std::memory_order_relaxed);
 	}
 }
 
@@ -264,25 +354,51 @@ Logging::log(int priority, std::string str, bool with_priority, bool with_endl)
 
 
 Log
-Logging::do_log(bool clears, std::chrono::steady_clock::time_point wakeup, bool async, int priority, std::string&& str)
+Logging::do_log(bool clears, std::chrono::steady_clock::time_point wakeup, bool async, bool info,
+		uint64_t once, int priority, std::exception_ptr eptr, const char* function, const char* filename, int line,
+		std::string&& str)
 {
 	if (priority <= config.log_level) {
-		return add(wakeup, std::move(str), clears, async, priority);
+		return add(wakeup, std::move(str), clears, async, info, once, priority, std::move(eptr), function, filename, line);
 	}
 	return Log();
 }
 
 
 Log
-Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bool clears, bool async, int priority,
+Logging::do_log(bool clears, std::chrono::steady_clock::time_point wakeup, bool async, int priority, std::string&& str)
+{
+	return do_log(clears, wakeup, async, true, 0, priority, std::exception_ptr{}, nullptr, nullptr, 0, std::move(str));
+}
+
+
+Log
+Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bool clears, bool async, bool info,
+		uint64_t once, int priority, std::exception_ptr eptr, const char* function, const char* filename, int line,
 		std::chrono::steady_clock::time_point created_at,
 		std::chrono::system_clock::time_point timestamp)
 {
-	auto entry = std::make_shared<Logging>(std::move(str), clears, async, priority, created_at, timestamp);
+	bool will_schedule = async || wakeup > std::chrono::steady_clock::now();
 
-	if (async || wakeup > std::chrono::steady_clock::now()) {
-		// async ("now") and deferred ("now + delay") logs ride the wheel; the
+	// Backpressure: when the wheel is saturated, drop routine async lines (NOTICE
+	// and below severity, non-deferred) rather than grow without bound. Severe and
+	// deferred ("clears") lines are never dropped. The drop is counted and a
+	// coalesced summary is emitted by the next line that fires.
+	if (will_schedule && config.max_pending > 0
+			&& pending.load(std::memory_order_relaxed) >= static_cast<long>(config.max_pending)
+			&& !clears && priority >= LOG_NOTICE) {
+		dropped.fetch_add(1, std::memory_order_relaxed);
+		return Log();
+	}
+
+	auto entry = std::make_shared<Logging>(std::move(str), clears, async, info, once, priority,
+		std::move(eptr), function, filename, line, created_at, timestamp);
+
+	if (will_schedule) {
+		// async ("now") and deferred ("now + delay") lines ride the wheel; the
 		// LOG thread fires operator() and writes them.
+		entry->scheduled = true;
+		pending.fetch_add(1, std::memory_order_relaxed);
 		scheduler().add(entry, wakeup);
 	} else {
 		// immediate logs run inline on the calling thread.
@@ -296,11 +412,53 @@ Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bo
 void
 Logging::operator()()
 {
-	std::string msg;
-	if (config.with_timestamp) {
-		msg += default_timestamp(timestamp);
+	// Report any lines dropped under backpressure since the last fire.
+	if (auto d = dropped.exchange(0, std::memory_order_relaxed); d > 0) {
+		log(LOG_WARNING, "dropped " + std::to_string(d) + " log lines (backpressure)");
 	}
+
+	// `once` dedup: emit only the first occurrence of this (message, token).
+	if (once != 0) {
+		static OnceFilter filter;
+		uint64_t key = std::hash<std::string>{}(str) ^ (once * 0x9E3779B97F4A7C15ULL);
+		if (filter.seen_or_add(key)) {
+			return;
+		}
+	}
+
+	std::string msg;
+	if (info) {
+		if (config.with_timestamp) {
+			msg += hooked_timestamp(timestamp);
+		}
+		if (config.with_threads) {
+			msg += '(';
+			msg += hooked_thread_name(thread_id);
+			msg += ") ";
+		}
+		if (config.with_location && function != nullptr) {
+			msg += filename != nullptr ? filename : "";
+			msg += ':';
+			msg += std::to_string(line);
+			msg += " at ";
+			msg += function;
+			msg += ": ";
+		}
+	}
+
 	msg += str;
+
+	if (eptr) {
+		if (!str.empty()) {
+			msg += ": ";
+		}
+		msg += hooked_describe_exception(eptr);
+		auto bt = hooked_backtrace();
+		if (!bt.empty()) {
+			msg += '\n';
+			msg += bt;
+		}
+	}
 
 	if (async) {
 		auto a = age();
@@ -338,7 +496,8 @@ Logging::clean()
 	std::chrono::steady_clock::time_point c{};
 	if (atom_cleaned_at.compare_exchange_strong(c, now)) {
 		if (!unlog_str.empty() && unlog_priority <= config.log_level) {
-			add(now, std::move(unlog_str), false, async, unlog_priority, atom_created_at.load(), timestamp);
+			add(now, std::move(unlog_str), false, async, info, 0, unlog_priority,
+				std::exception_ptr{}, function, filename, line, atom_created_at.load(), timestamp);
 			unlog_str.clear();
 		}
 	}
