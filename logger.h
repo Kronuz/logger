@@ -22,11 +22,15 @@
 
 #pragma once
 
-#include <memory>        // for std::unique_ptr
+#include <atomic>        // for std::atomic
+#include <chrono>        // for steady_clock, system_clock, time_point
+#include <memory>        // for std::unique_ptr, std::shared_ptr
 #include <string>        // for std::string
 #include <string_view>   // for std::string_view
 #include <vector>        // for std::vector
 #include <syslog.h>      // for LOG_WARNING, LOG_ERR, LOG_DEBUG, ...
+
+#include "scheduler.h"   // for Scheduler, ScheduledTask, ThreadPolicyType
 
 
 #define DEFAULT_LOG_LEVEL LOG_WARNING       // emitted when priority <= this
@@ -34,10 +38,11 @@
 
 
 // Runtime configuration. Replaces Xapiand's global `opts`; later phases grow
-// this with the format toggles and the async cutoff.
+// this with more format toggles and the async cutoff.
 struct LogConfig {
 	int log_level = DEFAULT_LOG_LEVEL;
-	bool colors = false;   // keep ANSI color in the output; false strips it
+	bool colors = false;          // keep ANSI color in the output; false strips it
+	bool with_timestamp = true;   // prepend a timestamp in the decorated path
 };
 
 
@@ -79,18 +84,91 @@ public:
 };
 
 
-// The logging facade.
-//
-// Phase 1 covers configuration, the sinks, and the immediate emit path
-// (formatting and writing on the calling thread). The scheduler-backed async
-// and deferred paths land in a later phase; see ARCHITECTURE.md.
-class Logging {
+class Log;
+class Logging;
+using LogType = std::shared_ptr<Logging>;
+
+
+// One log entry, and also a ScheduledTask so the async and deferred paths can
+// ride the scheduler's lock-free wheel. The scheduler's single "LOG" consumer
+// thread is the one that fires operator() and writes the line. See
+// ARCHITECTURE.md for the three paths a log can take.
+class Logging : public ScheduledTask<Scheduler<Logging, ThreadPolicyType::logging>, Logging, ThreadPolicyType::logging> {
+	friend class Log;
+
+	using Base = ScheduledTask<Scheduler<Logging, ThreadPolicyType::logging>, Logging, ThreadPolicyType::logging>;
+
+	static Scheduler<Logging, ThreadPolicyType::logging>& scheduler();
+
+	std::string str;
+	int priority;
+	bool clears;        // cancel the scheduled line when the handle is cleaned
+	bool async;         // offloaded to the LOG thread (vs. inline on the caller)
+	std::chrono::system_clock::time_point timestamp;
+	std::atomic<std::chrono::steady_clock::time_point> atom_cleaned_at;
+
+	// The message that replaces this one when the handle is cleaned (the "swap").
+	std::string unlog_str;
+	int unlog_priority;
+
+	Logging(const Logging&) = delete;
+	Logging& operator=(const Logging&) = delete;
+
+	// Build a Logging and route it: inline if it is due now and synchronous,
+	// otherwise onto the scheduler keyed at `wakeup`.
+	static Log add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bool clears, bool async, int priority,
+		std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now(),
+		std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::now());
+
 public:
 	static LogConfig config;
 	static std::vector<std::unique_ptr<Logger>> handlers;
 
-	// Emit `str` to every installed handler, right now, on the calling thread.
+	Logging(std::string&& str, bool clears, bool async, int priority,
+		std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now(),
+		std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::now());
+	~Logging() noexcept;
+
+	// Low-level fan-out: write `str` to every handler now, on the calling thread.
 	static void log(int priority, std::string str, bool with_priority = true, bool with_endl = true);
+
+	// The public entry point. Renders nothing if priority is filtered out.
+	static Log do_log(bool clears, std::chrono::steady_clock::time_point wakeup, bool async, int priority, std::string&& str);
+
+	// Drain and stop the LOG thread. Call at shutdown before the statics tear
+	// down, or pending async lines can outlive their sinks.
+	static bool finish(int wait = 10);
+	static bool join(int timeout = 60000);
+
+	void vunlog(int priority, std::string&& str);
+	void clean();
+	bool clear(bool internal = false);
+	std::chrono::nanoseconds age();
+
+	void operator()();
+};
+
+
+// Owns a scheduled log and lets the caller cancel it or swap its message before
+// it fires. Dropping the handle runs clean(): cancel the line if it `clears`,
+// otherwise emit the swapped-in message.
+class Log {
+	LogType entry;
+
+	Log(const Log&) = delete;
+	Log& operator=(const Log&) = delete;
+
+public:
+	Log() = default;
+	Log(Log&& o) noexcept;
+	Log& operator=(Log&& o) noexcept;
+	explicit Log(LogType entry);
+	~Log() noexcept;
+
+	void unlog(int priority, std::string str);
+	bool clear();
+	std::chrono::nanoseconds age();
+	LogType release();
 };
 
 
