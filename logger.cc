@@ -527,7 +527,12 @@ Logging::scheduler()
 bool
 Logging::finish(int wait)
 {
-	return scheduler().finish(wait);
+	bool ok = scheduler().finish(wait);
+	// Restore the terminal at shutdown: clear the iTerm2 badge / tab tint and pop
+	// the saved title. (A no-op unless iTerm2 customizations were applied.) This was
+	// part of the original logger's finish() and must not be lost on extraction.
+	reset_iterm2();
+	return ok;
 }
 
 bool
@@ -828,6 +833,13 @@ Logging::tab_rgb(int red, int green, int blue)
 void
 Logging::tab_title(std::string_view title)
 {
+	// Save the terminal's current title the first time we change it, so reset_iterm2()
+	// can restore it at shutdown. \033[22;0t pushes the icon+window title onto the
+	// terminal's title stack (xterm window op; iTerm2 implements it).
+	static std::atomic<bool> saved{false};
+	if (iterm2_available() && !saved.exchange(true)) {
+		iterm2_emit("\033[22;0t");
+	}
 	iterm2_emit(std::format("\033]0;{}\a", title));
 }
 
@@ -846,5 +858,7 @@ Logging::growl(std::string_view text)
 void
 Logging::reset_iterm2()
 {
-	iterm2_emit("\033]1337;SetBadgeFormat=\a\033]6;1;bg;*;default\a");
+	// Clear the badge, reset the tab tint to the profile default, and pop the title
+	// saved by the first tab_title() (\033[23;0t restores it from the title stack).
+	iterm2_emit("\033]1337;SetBadgeFormat=\a\033]6;1;bg;*;default\a\033[23;0t");
 }
