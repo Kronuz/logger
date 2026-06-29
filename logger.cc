@@ -357,7 +357,7 @@ SysLog::log(int priority, std::string_view str, bool with_priority, bool /*with_
 // --- Logging -------------------------------------------------------------
 
 Logging::Logging(std::string&& str_, bool clears_, bool async_, bool info_, uint64_t once_, int priority_,
-		std::exception_ptr eptr_, const char* function_, const char* filename_, int line_,
+		std::exception_ptr eptr_, std::source_location loc_,
 		std::chrono::steady_clock::time_point created_at,
 		std::chrono::system_clock::time_point timestamp_)
 	: Base(created_at),
@@ -369,9 +369,7 @@ Logging::Logging(std::string&& str_, bool clears_, bool async_, bool info_, uint
 	  once(once_),
 	  eptr(std::move(eptr_)),
 	  thread_id(std::this_thread::get_id()),
-	  function(function_),
-	  filename(filename_),
-	  line(line_),
+	  loc(loc_),
 	  indent(log_indent()),
 	  scheduled(false),
 	  timestamp(timestamp_),
@@ -426,11 +424,11 @@ Logging::log(int priority, std::string str, bool with_priority, bool with_endl)
 
 Log
 Logging::do_log(bool clears, std::chrono::steady_clock::time_point wakeup, bool async, bool info,
-		uint64_t once, int priority, std::exception_ptr eptr, const char* function, const char* filename, int line,
+		uint64_t once, int priority, std::exception_ptr eptr, std::source_location loc,
 		std::string&& str)
 {
 	if (priority <= config.log_level) {
-		return add(wakeup, std::move(str), clears, async, info, once, priority, std::move(eptr), function, filename, line);
+		return add(wakeup, std::move(str), clears, async, info, once, priority, std::move(eptr), loc);
 	}
 	return Log();
 }
@@ -439,13 +437,15 @@ Logging::do_log(bool clears, std::chrono::steady_clock::time_point wakeup, bool 
 Log
 Logging::do_log(bool clears, std::chrono::steady_clock::time_point wakeup, bool async, int priority, std::string&& str)
 {
-	return do_log(clears, wakeup, async, true, 0, priority, std::exception_ptr{}, nullptr, nullptr, 0, std::move(str));
+	// No call site for this convenience entry point: a default-constructed
+	// source_location reads as line()==0, which the decorator treats as "no location".
+	return do_log(clears, wakeup, async, true, 0, priority, std::exception_ptr{}, std::source_location{}, std::move(str));
 }
 
 
 Log
 Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bool clears, bool async, bool info,
-		uint64_t once, int priority, std::exception_ptr eptr, const char* function, const char* filename, int line,
+		uint64_t once, int priority, std::exception_ptr eptr, std::source_location loc,
 		std::chrono::steady_clock::time_point created_at,
 		std::chrono::system_clock::time_point timestamp)
 {
@@ -463,7 +463,7 @@ Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bo
 	}
 
 	auto entry = std::make_shared<Logging>(std::move(str), clears, async, info, once, priority,
-		std::move(eptr), function, filename, line, created_at, timestamp);
+		std::move(eptr), loc, created_at, timestamp);
 
 	if (will_schedule) {
 		// async ("now") and deferred ("now + delay") lines ride the wheel; the
@@ -507,12 +507,12 @@ Logging::operator()()
 			msg += hooked_thread_name(thread_id);
 			msg += ") ";
 		}
-		if (config.with_location && function != nullptr) {
-			msg += filename != nullptr ? filename : "";
+		if (config.with_location && loc.line() != 0) {
+			msg += loc.file_name();
 			msg += ':';
-			msg += std::to_string(line);
+			msg += std::to_string(loc.line());
 			msg += " at ";
-			msg += function;
+			msg += loc.function_name();
 			msg += ": ";
 		}
 	}
@@ -571,7 +571,7 @@ Logging::clean()
 	if (atom_cleaned_at.compare_exchange_strong(c, now)) {
 		if (!unlog_str.empty() && unlog_priority <= config.log_level) {
 			add(now, std::move(unlog_str), false, async, info, 0, unlog_priority,
-				std::exception_ptr{}, function, filename, line, atom_created_at.load(), timestamp);
+				std::exception_ptr{}, loc, atom_created_at.load(), timestamp);
 			unlog_str.clear();
 		}
 	}

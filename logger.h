@@ -29,6 +29,7 @@
 #include <format>        // for std::vformat, std::make_format_args
 #include <functional>    // for std::function
 #include <memory>        // for std::unique_ptr, std::shared_ptr
+#include <source_location>  // for std::source_location
 #include <string>        // for std::string
 #include <string_view>   // for std::string_view
 #include <thread>        // for std::thread::id
@@ -136,9 +137,7 @@ class Logging : public ScheduledTask<Scheduler<Logging, ThreadPolicyType::loggin
 	uint64_t once;      // dedup token; 0 = no dedup
 	std::exception_ptr eptr;
 	std::thread::id thread_id;
-	const char* function;
-	const char* filename;
-	int line;
+	std::source_location loc;   // call site (file / line / function), C++20
 	int indent;         // stacked-indent depth, captured at creation (thread-local)
 	bool scheduled;     // was put on the wheel (so ~Logging decrements `pending`)
 	std::chrono::system_clock::time_point timestamp;
@@ -152,7 +151,7 @@ class Logging : public ScheduledTask<Scheduler<Logging, ThreadPolicyType::loggin
 	Logging& operator=(const Logging&) = delete;
 
 	static Log add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bool clears, bool async, bool info,
-		uint64_t once, int priority, std::exception_ptr eptr, const char* function, const char* filename, int line,
+		uint64_t once, int priority, std::exception_ptr eptr, std::source_location loc,
 		std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now(),
 		std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::now());
 
@@ -162,7 +161,7 @@ public:
 	static std::vector<std::unique_ptr<Logger>> handlers;
 
 	Logging(std::string&& str, bool clears, bool async, bool info, uint64_t once, int priority,
-		std::exception_ptr eptr, const char* function, const char* filename, int line,
+		std::exception_ptr eptr, std::source_location loc,
 		std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now(),
 		std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::now());
 	~Logging() noexcept;
@@ -175,7 +174,7 @@ public:
 
 	// Full entry point used by the macros. Renders nothing if priority is filtered.
 	static Log do_log(bool clears, std::chrono::steady_clock::time_point wakeup, bool async, bool info,
-		uint64_t once, int priority, std::exception_ptr eptr, const char* function, const char* filename, int line,
+		uint64_t once, int priority, std::exception_ptr eptr, std::source_location loc,
 		std::string&& str);
 
 	// Convenience entry point: a plain decorated line, no exception or location.
@@ -289,7 +288,7 @@ struct LogIndent {
 #define L_LOG_BASE(clears, delay, async, info, once, priority, eptr, ...) \
 	(((priority) <= Logging::config.log_level) \
 		? Logging::do_log((clears), std::chrono::steady_clock::now() + (delay), (async), (info), (once), (priority), \
-			(eptr), __func__, __FILE__, __LINE__, ::format_msg(__VA_ARGS__)) \
+			(eptr), std::source_location::current(), ::format_msg(__VA_ARGS__)) \
 		: Log())
 
 #define LOG(once, priority, ...) \

@@ -108,12 +108,12 @@ int main() {
 		eptr = std::current_exception();
 	}
 	Logging::do_log(false, std::chrono::steady_clock::now(), false, true, 0, LOG_ERR,
-		eptr, "func", "file.cc", 42, "EXC_MARKER");
+		eptr, std::source_location::current(), "EXC_MARKER");
 
 	// --- Phase 3: `once` dedup ------------------------------------------
 	for (int i = 0; i < 3; ++i) {
 		Logging::do_log(false, std::chrono::steady_clock::now(), false, true, 0xABCDEFu, LOG_NOTICE,
-			std::exception_ptr{}, nullptr, nullptr, 0, "ONCE_MARKER");
+			std::exception_ptr{}, std::source_location::current(), "ONCE_MARKER");
 	}
 
 	// --- Phase 4: macro surface -----------------------------------------
