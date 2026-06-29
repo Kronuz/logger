@@ -22,8 +22,11 @@
 
 #include "logger.h"
 
-#include "colors.h"        // term-color palette: rgb(), CLEAR_COLOR (stacked escapes)
-#include "collapse.hh"     // term_color::collapse / detect_depth / depth
+#include "ansi_color.hh"   // term-color palette: rgb() / clear_color() (stacked escapes).
+                           // ansi_color.hh, not colors.h: a consumer (e.g. Xapiand) may
+                           // have its own colors.h on the include path; ansi_color.hh is
+                           // unambiguous.
+#include "collapse.hh"     // term_color::collapse / detect_depth / apply
 
 #include <cerrno>          // for errno, EINTR
 #include <cstdint>         // for uint8_t, uint32_t
@@ -68,7 +71,7 @@ make_marker(std::string_view color, std::string_view glyph)
 {
 	std::string s(color);
 	s += glyph;
-	s += std::string_view(CLEAR_COLOR);
+	s += std::string_view(clear_color());
 	return s;
 }
 
@@ -643,7 +646,7 @@ Logging::operator()()
 			// thread/location inherits) does not bleed into the message body. The
 			// stacked reset is collapsed or stripped with everything else by render().
 			msg += deco;
-			msg += std::string_view(CLEAR_COLOR);
+			msg += std::string_view(clear_color());
 		}
 	}
 
