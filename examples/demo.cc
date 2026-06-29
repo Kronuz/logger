@@ -35,7 +35,8 @@ static void slow_op() {
 
 
 int main() {
-	Logging::config.colors = true;
+	Logging::config.color = LogColorMode::always;  // force color regardless of tty
+	Logging::config.timestamp_gradient = true;     // show the grey-ramp timestamp
 	Logging::config.with_timestamp = true;
 	Logging::config.with_threads = true;
 	Logging::config.log_level = LOG_INFO;

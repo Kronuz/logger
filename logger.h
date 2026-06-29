@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include <array>         // for std::array (the marker palette)
 #include <atomic>        // for std::atomic
 #include <chrono>        // for steady_clock, system_clock, time_point
 #include <cstdint>       // for uint64_t
@@ -44,16 +45,57 @@
 #define MAX_LOG_PRIORITY  (LOG_DEBUG + 1)   // highest formatted level (+1 = verbose)
 
 
+// When to colorize, independent of the depth below. Mirrors the conventional
+// `--color=<mode>` flag (git / ls / grep).
+enum class LogColorMode {
+	automatic,  // color only when the sink is a tty and NO_COLOR is unset/empty
+	always,     // force color, overriding the tty check and NO_COLOR
+	never,      // never color
+};
+
+// The color tier term-color's depth-portable output is collapsed to. term-color
+// emits three stacked escapes per color (16 / 256 / truecolor); a capable terminal
+// already ends on the best tier it supports, but collapsing to one tier yields
+// clean single-escape output and is robust on terminals that render rather than
+// ignore the escapes they do not understand. `automatic` detects the tier from the
+// terminal (COLORTERM / TERM).
+enum class LogColorDepth {
+	automatic,  // detect the tier from the terminal (COLORTERM / TERM)
+	ansi16,     // 16-color  (\033[..;30-37/90-97m)
+	ansi256,    // 256-color (\033[..;38;5;Nm)
+	truecolor,  // 24-bit    (\033[..;38;2;R;G;Bm)
+	stacked,    // do not collapse: emit all three stacked tiers and let the terminal
+	            // apply the best it understands (no post-processing, larger output)
+};
+
+// How the decorated-line timestamp is formatted.
+enum class LogTimestamp {
+	none,
+	datetime,   // YYYYMMDDHHMMSS (compact; pairs nicely with `timestamp_gradient`)
+	iso8601,    // YYYY-MM-DD HH:MM:SS
+	epoch,      // seconds since the epoch
+};
+enum class LogPrecision { seconds, milliseconds, microseconds };
+
+
 // Runtime configuration. Replaces Xapiand's global `opts`.
 struct LogConfig {
 	int log_level = DEFAULT_LOG_LEVEL;
-	bool colors = false;          // keep ANSI color in the output; false strips it
+	LogColorMode color = LogColorMode::automatic;          // when to colorize (--color)
+	LogColorDepth color_depth = LogColorDepth::automatic;  // tier to collapse color to
 	bool with_timestamp = true;   // prepend a timestamp in the decorated path
+	LogTimestamp timestamp = LogTimestamp::iso8601;        // its format
+	LogPrecision precision = LogPrecision::milliseconds;   // its sub-second precision
+	bool timestamp_gradient = false;  // grey-gradient the timestamp digits
 	bool with_threads = false;    // prepend "(thread-name) "
 	bool with_location = false;   // prepend "file:line at function: "
 	bool iterm2 = true;           // emit iTerm2 escape codes (marks, tab tint, badge,
 	                              // notifications) when stderr is an iTerm2 terminal
 	                              // (auto-detected). false disables them entirely.
+
+	// The per-priority severity marker (the leading bar). An empty entry falls back
+	// to the built-in palette; a host can install richer (e.g. truecolor) markers.
+	std::array<std::string, MAX_LOG_PRIORITY + 1> markers{};
 
 	// Backpressure. 0 = unbounded. Otherwise, once this many lines are pending on
 	// the wheel, routine async lines (NOTICE and below severity, non-deferred) are

@@ -22,6 +22,9 @@
 
 #include "logger.h"
 
+#include "colors.h"        // term-color palette: rgb(), CLEAR_COLOR (stacked escapes)
+#include "collapse.hh"     // term_color::collapse / detect_depth / depth
+
 #include <cerrno>          // for errno, EINTR
 #include <cstdint>         // for uint8_t, uint32_t
 #include <cstdio>          // for snprintf
@@ -56,20 +59,41 @@ log_indent() noexcept
 }
 
 
+// A severity marker: a colored block glyph followed by a reset, built from
+// term-color's stacked escapes (16 / 256 / truecolor) so render() collapses it to
+// whatever depth the terminal supports. The leading bar carries the level at a
+// glance; its width tapers as severity drops.
+static std::string
+make_marker(std::string_view color, std::string_view glyph)
+{
+	std::string s(color);
+	s += glyph;
+	s += std::string_view(CLEAR_COLOR);
+	return s;
+}
+
 // One marker per syslog priority (LOG_EMERG=0 .. LOG_DEBUG=7), plus a blank
-// "verbose" slot. The bar glyph carries the level at a glance; the trailing
-// "\033[0m" resets color, and render() strips the whole escape when color is off.
+// "verbose" slot. The palette matches Xapiand's long-standing severity colors. A
+// host can still override any entry via config.markers.
 static const std::string priorities[MAX_LOG_PRIORITY + 1] = {
-	"\033[1;41m█\033[0m",  // LOG_EMERG   0
-	"\033[1;31m▉\033[0m",  // LOG_ALERT   1
-	"\033[31m▊\033[0m",    // LOG_CRIT    2
-	"\033[31m▋\033[0m",    // LOG_ERR     3
-	"\033[33m▌\033[0m",    // LOG_WARNING 4
-	"\033[32m▍\033[0m",    // LOG_NOTICE  5
-	"\033[36m▎\033[0m",    // LOG_INFO    6
-	"\033[90m▏\033[0m",    // LOG_DEBUG   7
-	"",                    // verbose   > 7
+	make_marker(std::string_view(rgb(238, 82, 83)),  "█"),  // LOG_EMERG   0
+	make_marker(std::string_view(rgb(238, 82, 83)),  "▉"),  // LOG_ALERT   1
+	make_marker(std::string_view(rgb(238, 82, 83)),  "▊"),  // LOG_CRIT    2
+	make_marker(std::string_view(rgb(179, 57, 57)),  "▋"),  // LOG_ERR     3
+	make_marker(std::string_view(rgb(255, 177, 66)), "▌"),  // LOG_WARNING 4
+	make_marker(std::string_view(rgb(116, 185, 255)), "▍"), // LOG_NOTICE  5
+	make_marker(std::string_view(rgb(63, 119, 179)), "▎"),  // LOG_INFO    6
+	make_marker(std::string_view(rgb(105, 105, 105)), "▏"), // LOG_DEBUG   7
+	"",                                                      // verbose   > 7
 };
+
+
+// Grey ramp for the timestamp gradient, as term-color stacked escapes (collapsed
+// per-terminal by render()). default_timestamp() picks among these per digit group.
+static const std::string kGrey60 {std::string_view(rgb( 60,  60,  60))};
+static const std::string kGrey94 {std::string_view(rgb( 94,  94,  94))};
+static const std::string kGrey162{std::string_view(rgb(162, 162, 162))};
+static const std::string kGrey230{std::string_view(rgb(230, 230, 230))};
 
 
 // Bounded dedup for `once` lines. Two alternating sets: when the active set
@@ -222,38 +246,134 @@ strip_colors(std::string_view str)
 }
 
 
-// Build the bytes a sink writes: optional priority marker, the message,
-// optional newline, with color kept or stripped per `colorize`.
+// Map the logger's public color config onto term-color's resolution layer, which
+// owns the whole NO_COLOR / tty / mode / collapse policy.
+static term_color::mode
+tc_mode(LogColorMode m)
+{
+	switch (m) {
+		case LogColorMode::always: return term_color::mode::always;
+		case LogColorMode::never:  return term_color::mode::never;
+		case LogColorMode::automatic:
+		default:                   return term_color::mode::automatic;
+	}
+}
+
+static term_color::target
+tc_target(LogColorDepth d)
+{
+	switch (d) {
+		case LogColorDepth::ansi16:    return term_color::target::ansi16;
+		case LogColorDepth::ansi256:   return term_color::target::ansi256;
+		case LogColorDepth::truecolor: return term_color::target::truecolor;
+		case LogColorDepth::stacked:   return term_color::target::stacked;
+		case LogColorDepth::automatic:
+		default:                       return term_color::target::automatic;
+	}
+}
+
+// Build the bytes a sink writes: optional priority marker, the message, optional
+// newline, then hand the whole line to term-color to gate (mode / NO_COLOR / tty)
+// and collapse (or strip, or pass the stack through) for this sink.
 static std::string
-render(int priority, std::string_view str, bool with_priority, bool with_endl, bool colorize)
+render(int priority, std::string_view str, bool with_priority, bool with_endl, bool is_terminal)
 {
 	std::string buf;
 	if (with_priority) {
-		buf += priorities[priority];
+		const std::string& m = Logging::config.markers[priority];
+		buf += m.empty() ? priorities[priority] : m;
 	}
 	buf += str;
 	if (with_endl) {
 		buf += '\n';
 	}
-	return colorize ? buf : strip_colors(buf);
+	return term_color::apply(buf, tc_mode(Logging::config.color),
+		tc_target(Logging::config.color_depth), is_terminal);
 }
 
 
 // --- default hook implementations ---------------------------------------
 
+// The decorated-line timestamp. Honors config.timestamp (the style),
+// config.precision (the sub-second digits), and config.timestamp_gradient (whether
+// to grey-ramp the digits with term-color escapes, collapsed per-terminal by
+// render()). Three styles:
+//   datetime  YYYYMMDDHHMMSS, gradient ramps up to the hour then back down
+//   iso8601   YYYY-MM-DD HH:MM:SS, bright digits / dim separators
+//   epoch     seconds since the epoch
+// The returned string ends without a color reset; operator() appends one after the
+// whole info decoration (so a trailing thread/location inherits the dim tail color,
+// matching the original).
 static std::string
 default_timestamp(std::chrono::system_clock::time_point tp)
 {
 	using namespace std::chrono;
+	const auto& cfg = Logging::config;
+	if (cfg.timestamp == LogTimestamp::none) {
+		return {};
+	}
+
+	const bool grad = cfg.timestamp_gradient;
+	auto g = [grad](const std::string& col) -> const std::string& {
+		static const std::string none;
+		return grad ? col : none;
+	};
+
 	auto t = system_clock::to_time_t(tp);
-	auto ms = duration_cast<milliseconds>(tp.time_since_epoch()) % 1000;
+	long us = static_cast<long>(duration_cast<microseconds>(tp.time_since_epoch()).count() % 1000000);
 	std::tm tm{};
 	localtime_r(&t, &tm);
-	char buf[40];
-	std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d.%03d ",
-		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-		tm.tm_hour, tm.tm_min, tm.tm_sec, static_cast<int>(ms.count()));
-	return buf;
+
+	char b[32];
+	std::string s;
+
+	// Dim, optional sub-second suffix (".mmm" / ".uuuuuu") per precision.
+	auto frac = [&]() {
+		if (cfg.precision == LogPrecision::microseconds) {
+			std::snprintf(b, sizeof b, "%06ld", us);
+			s += g(kGrey60); s += '.'; s += b;
+		} else if (cfg.precision == LogPrecision::milliseconds) {
+			std::snprintf(b, sizeof b, "%03ld", us / 1000);
+			s += g(kGrey60); s += '.'; s += b;
+		}
+	};
+
+	if (cfg.timestamp == LogTimestamp::epoch) {
+		std::snprintf(b, sizeof b, "%010ld", static_cast<long>(t));
+		s += g(kGrey94); s += b;
+		frac();
+		s += ' ';
+		return s;
+	}
+
+	if (cfg.timestamp == LogTimestamp::iso8601) {
+		// Bright digits (94), dim separators (60).
+		std::snprintf(b, sizeof b, "%04d", tm.tm_year + 1900); s += g(kGrey94); s += b;
+		s += g(kGrey60); s += '-';
+		std::snprintf(b, sizeof b, "%02d", tm.tm_mon + 1);     s += g(kGrey94); s += b;
+		s += g(kGrey60); s += '-';
+		std::snprintf(b, sizeof b, "%02d", tm.tm_mday);        s += g(kGrey94); s += b;
+		s += g(kGrey60); s += ' ';
+		std::snprintf(b, sizeof b, "%02d", tm.tm_hour);        s += g(kGrey94); s += b;
+		s += g(kGrey60); s += ':';
+		std::snprintf(b, sizeof b, "%02d", tm.tm_min);         s += g(kGrey94); s += b;
+		s += g(kGrey60); s += ':';
+		std::snprintf(b, sizeof b, "%02d", tm.tm_sec);         s += g(kGrey94); s += b;
+		frac();
+		s += ' ';
+		return s;
+	}
+
+	// LogTimestamp::datetime -- compact YYYYMMDDHHMMSS, brightness ramps to the hour.
+	std::snprintf(b, sizeof b, "%04d", tm.tm_year + 1900); s += g(kGrey60);  s += b;
+	std::snprintf(b, sizeof b, "%02d", tm.tm_mon + 1);     s += g(kGrey94);  s += b;
+	std::snprintf(b, sizeof b, "%02d", tm.tm_mday);        s += g(kGrey162); s += b;
+	std::snprintf(b, sizeof b, "%02d", tm.tm_hour);        s += g(kGrey230); s += b;
+	std::snprintf(b, sizeof b, "%02d", tm.tm_min);         s += g(kGrey162); s += b;
+	std::snprintf(b, sizeof b, "%02d", tm.tm_sec);         s += g(kGrey94);  s += b;
+	frac();
+	s += ' ';
+	return s;
 }
 
 static std::string
@@ -323,7 +443,8 @@ StreamLogger::~StreamLogger() noexcept
 void
 StreamLogger::log(int priority, std::string_view str, bool with_priority, bool with_endl)
 {
-	auto buf = render(priority, str, with_priority, with_endl, Logging::config.colors);
+	// A file is never a terminal: color only when forced (config.color == always).
+	auto buf = render(priority, str, with_priority, with_endl, /*is_terminal=*/false);
 	write_all(fdout, buf.data(), buf.size());
 }
 
@@ -331,7 +452,7 @@ StreamLogger::log(int priority, std::string_view str, bool with_priority, bool w
 void
 StderrLogger::log(int priority, std::string_view str, bool with_priority, bool with_endl)
 {
-	auto buf = render(priority, str, with_priority, with_endl, is_tty() || Logging::config.colors);
+	auto buf = render(priority, str, with_priority, with_endl, /*is_terminal=*/is_tty());
 	write_all(STDERR_FILENO, buf.data(), buf.size());
 }
 
@@ -349,7 +470,8 @@ SysLog::~SysLog() noexcept
 void
 SysLog::log(int priority, std::string_view str, bool with_priority, bool /*with_endl*/)
 {
-	auto buf = render(priority, str, with_priority, false, Logging::config.colors);
+	// syslog is never a terminal: color only when forced (config.color == always).
+	auto buf = render(priority, str, with_priority, false, /*is_terminal=*/false);
 	syslog(priority, "%s", buf.c_str());
 }
 
@@ -499,21 +621,29 @@ Logging::operator()()
 
 	std::string msg;
 	if (info) {
+		std::string deco;
 		if (config.with_timestamp) {
-			msg += hooked_timestamp(timestamp);
+			deco += hooked_timestamp(timestamp);
 		}
 		if (config.with_threads) {
-			msg += '(';
-			msg += hooked_thread_name(thread_id);
-			msg += ") ";
+			deco += '(';
+			deco += hooked_thread_name(thread_id);
+			deco += ") ";
 		}
 		if (config.with_location && loc.line() != 0) {
-			msg += loc.file_name();
-			msg += ':';
-			msg += std::to_string(loc.line());
-			msg += " at ";
-			msg += loc.function_name();
-			msg += ": ";
+			deco += loc.file_name();
+			deco += ':';
+			deco += std::to_string(loc.line());
+			deco += " at ";
+			deco += loc.function_name();
+			deco += ": ";
+		}
+		if (!deco.empty()) {
+			// Reset after the decoration so the gradient's dim tail (which a trailing
+			// thread/location inherits) does not bleed into the message body. The
+			// stacked reset is collapsed or stripped with everything else by render().
+			msg += deco;
+			msg += std::string_view(CLEAR_COLOR);
 		}
 	}
 

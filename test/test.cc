@@ -55,7 +55,7 @@ int main() {
 	CHECK(fd >= 0);
 	::close(fd);
 
-	Logging::config.colors = false;
+	Logging::config.color = LogColorMode::never;  // assert no ANSI in the file output
 	Logging::config.log_level = LOG_DEBUG;  // let INFO/DEBUG through for the test
 	Logging::handlers.clear();
 	Logging::handlers.emplace_back(std::make_unique<StreamLogger>(path));
