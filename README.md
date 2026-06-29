@@ -73,23 +73,34 @@ int main() {
 }
 ```
 
-Running the bundled `examples/demo.cc` produces (colorized on a tty):
+The bundled [`examples/demo.cc`](examples/demo.cc) is a runnable tour, built by a
+top-level CMake build:
 
-```
-▎ 2026-06-28 12:45:01.392 (0x1f4b5de80) logger demo starting
-▍ 2026-06-28 12:45:01.392 (0x1f4b5de80) a notice: answer = 42
-▌ 2026-06-28 12:45:01.392 (0x1f4b5de80) a warning with a number: 7
-▊ 2026-06-28 12:45:01.392 (0x1f4b5de80) caught while doing work: something broke
-▎ 2026-06-28 12:45:01.392 (0x1f4b5de80) this once-line prints only the first time
-▎ 2026-06-28 12:45:01.392 (0x1f4b5de80) processing batch
-▎ 2026-06-28 12:45:01.392 (0x1f4b5de80)   item A
-▎ 2026-06-28 12:45:01.392 (0x1f4b5de80)   item B
-▌ 2026-06-28 12:45:01.417 (0x1f4b5de80) slow_op is taking too long ~200.3ms
-▎ 2026-06-28 12:45:01.769 (0x1f4b5de80) logger demo done
+```sh
+cmake -B build && cmake --build build && ./build/logger_demo
 ```
 
-Note what is *not* there: `fast_op`'s "too long" line, because it finished in
-time and cancelled it. `slow_op`'s fired, annotated with how long it ran.
+It tours the severity palette (each level's rgb marker, brightest = most severe),
+the grey-gradient timestamp, `std::format` messages, exception logging, once-dedup,
+stacked indentation, the deferred "log slow ops only" pattern, and the iTerm2
+integration. Colorized on a tty (the demo forces it on); abbreviated here:
+
+```
+█ 2026-06-29 08:55:43.557 L_EMERG   system is unusable
+▉ 2026-06-29 08:55:43.557 L_ALERT   action must be taken immediately
+▊ 2026-06-29 08:55:43.557 L_CRIT    critical condition
+▋ 2026-06-29 08:55:43.557 L_ERR     error condition
+▌ 2026-06-29 08:55:43.557 L_WARNING warning condition
+▍ 2026-06-29 08:55:43.557 L_NOTICE  normal but significant
+▎ 2026-06-29 08:55:43.558 L_INFO    informational
+▊ 2026-06-29 08:55:43.558 caught while doing work: something broke
+▎ 2026-06-29 08:55:43.558   item A
+▌ 2026-06-29 08:55:43.583 slow_op is taking too long ~201.7ms
+```
+
+Note what is *not* there: `fast_op`'s "too long" line, because it finished in time
+and cancelled it (`slow_op`'s fired, annotated with how long it ran), and the
+second identical once-line, which was deduped.
 
 ## API reference
 
