@@ -23,7 +23,9 @@
 #include "logger.h"
 
 #include <cerrno>          // for errno, EINTR
+#include <cstdint>         // for uint8_t, uint32_t
 #include <cstdio>          // for snprintf
+#include <cstdlib>         // for std::getenv
 #include <ctime>           // for localtime_r, std::tm
 #include <exception>       // for std::rethrow_exception
 #include <fcntl.h>         // for open, O_WRONLY, O_CREAT, O_APPEND
@@ -137,6 +139,65 @@ write_all(int fd, const char* data, size_t size)
 		}
 		data += n;
 		size -= static_cast<size_t>(n);
+	}
+}
+
+
+// True once if stderr is an iTerm2 terminal, detected from the environment iTerm2
+// exports. Gated on stderr being a tty so redirected output never gets escapes.
+static bool
+detect_iterm2()
+{
+	if (!is_tty()) {
+		return false;
+	}
+	const char* tp = std::getenv("TERM_PROGRAM");
+	if (tp != nullptr && std::string_view(tp) == "iTerm.app") {
+		return true;
+	}
+	const char* lt = std::getenv("LC_TERMINAL");
+	return lt != nullptr && std::string_view(lt) == "iTerm2";
+}
+
+
+// Minimal RFC 4648 base64, for the iTerm2 badge (which wants base64 text). Kept
+// inline so the logger has no dependency beyond the scheduler stack.
+static std::string
+base64(std::string_view in)
+{
+	static const char tbl[] =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	std::string out;
+	out.reserve(((in.size() + 2) / 3) * 4);
+	size_t i = 0;
+	for (; i + 3 <= in.size(); i += 3) {
+		uint32_t n = (uint32_t(uint8_t(in[i])) << 16) | (uint32_t(uint8_t(in[i + 1])) << 8) | uint8_t(in[i + 2]);
+		out += tbl[(n >> 18) & 63];
+		out += tbl[(n >> 12) & 63];
+		out += tbl[(n >> 6) & 63];
+		out += tbl[n & 63];
+	}
+	if (i < in.size()) {
+		bool two = (i + 1 < in.size());
+		uint32_t n = uint32_t(uint8_t(in[i])) << 16;
+		if (two) {
+			n |= uint32_t(uint8_t(in[i + 1])) << 8;
+		}
+		out += tbl[(n >> 18) & 63];
+		out += tbl[(n >> 12) & 63];
+		out += two ? tbl[(n >> 6) & 63] : '=';
+		out += '=';
+	}
+	return out;
+}
+
+
+// Write an iTerm2 escape sequence to stderr, only when iTerm2 is available+enabled.
+static void
+iterm2_emit(std::string_view seq)
+{
+	if (Logging::iterm2_available()) {
+		write_all(STDERR_FILENO, seq.data(), seq.size());
 	}
 }
 
@@ -602,4 +663,55 @@ Log::release()
 	auto ret = entry;
 	entry.reset();
 	return ret;
+}
+
+
+// --- iTerm2 terminal integration -----------------------------------------
+//
+// iTerm2 proprietary escape codes (https://iterm2.com/documentation-escape-codes.html).
+// Each is a no-op unless stderr is an iTerm2 terminal and config.iterm2 is set.
+
+bool
+Logging::iterm2_available()
+{
+	static const bool is_iterm = detect_iterm2();   // terminal type never changes mid-run
+	return is_iterm && config.iterm2;               // but the host can toggle the flag
+}
+
+void
+Logging::set_mark()
+{
+	iterm2_emit("\033]1337;SetMark\a");
+}
+
+void
+Logging::tab_rgb(int red, int green, int blue)
+{
+	iterm2_emit(std::format(
+		"\033]6;1;bg;red;brightness;{}\a\033]6;1;bg;green;brightness;{}\a\033]6;1;bg;blue;brightness;{}\a",
+		red, green, blue));
+}
+
+void
+Logging::tab_title(std::string_view title)
+{
+	iterm2_emit(std::format("\033]0;{}\a", title));
+}
+
+void
+Logging::badge(std::string_view text)
+{
+	iterm2_emit(std::format("\033]1337;SetBadgeFormat={}\a", base64(text)));
+}
+
+void
+Logging::growl(std::string_view text)
+{
+	iterm2_emit(std::format("\033]9;{}\a", text));
+}
+
+void
+Logging::reset_iterm2()
+{
+	iterm2_emit("\033]1337;SetBadgeFormat=\a\033]6;1;bg;*;default\a");
 }

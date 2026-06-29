@@ -50,6 +50,9 @@ struct LogConfig {
 	bool with_timestamp = true;   // prepend a timestamp in the decorated path
 	bool with_threads = false;    // prepend "(thread-name) "
 	bool with_location = false;   // prepend "file:line at function: "
+	bool iterm2 = true;           // emit iTerm2 escape codes (marks, tab tint, badge,
+	                              // notifications) when stderr is an iTerm2 terminal
+	                              // (auto-detected). false disables them entirely.
 
 	// Backpressure. 0 = unbounded. Otherwise, once this many lines are pending on
 	// the wheel, routine async lines (NOTICE and below severity, non-deferred) are
@@ -184,6 +187,17 @@ public:
 
 	// Lines dropped under backpressure so far (observability / tests).
 	static long dropped_count() { return dropped.load(std::memory_order_relaxed); }
+
+	// iTerm2 terminal integration. Each emits an iTerm2 proprietary escape code,
+	// and is a safe no-op unless stderr is an iTerm2 terminal (auto-detected via
+	// TERM_PROGRAM / LC_TERMINAL) and config.iterm2 is set. Callable from anywhere.
+	static bool iterm2_available();                      // true if iTerm2 + a tty + enabled
+	static void set_mark();                              // a navigable mark in the scrollback
+	static void tab_rgb(int red, int green, int blue);   // tint the tab / title bar
+	static void tab_title(std::string_view title);       // set the tab / window title
+	static void badge(std::string_view text);            // set the iTerm2 badge
+	static void growl(std::string_view text);            // post a notification
+	static void reset_iterm2();                          // clear badge + tab tint
 
 	void vunlog(int priority, std::string&& str);
 	void clean();

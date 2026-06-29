@@ -172,6 +172,17 @@ int main() {
 	CHECK(out.find("backpressure") != std::string::npos);        // drop summary emitted
 	CHECK(out.find('\033') == std::string::npos);                // colors off -> no ANSI
 
+	// iTerm2 integration: auto-detected, and a safe no-op off an iTerm2 terminal.
+	// Here stderr is not an iTerm2 tty, so availability is false and each call
+	// emits nothing and must not crash.
+	CHECK(!Logging::iterm2_available());
+	Logging::set_mark();
+	Logging::tab_rgb(255, 128, 0);
+	Logging::tab_title("test-title");
+	Logging::badge("hi");
+	Logging::growl("done");
+	Logging::reset_iterm2();
+
 	std::remove(path);
 	std::printf("logger Phase 1-3 smoke test: OK\n");
 	return 0;
