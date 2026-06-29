@@ -13,19 +13,19 @@ include(FetchContent)
 FetchContent_Declare(
   scheduler
   GIT_REPOSITORY https://github.com/Kronuz/scheduler.git
-  GIT_TAG        4e38b059c54cc492623ed61ae86d7da7ce3b7658  # scheduler on sentinel stash
+  GIT_TAG        main  # track tip
 )
 FetchContent_MakeAvailable(scheduler)
 
 # term-color: the compile-time stacked color palette (rgb()/CLEAR_COLOR) plus the
 # runtime resolution layer (collapse / detect_depth / apply). The logger uses it for
 # the severity markers, the gradient timestamp, and to gate + collapse every line to
-# the terminal's depth (the NO_COLOR / --color policy). Pinned to the SHA the color
-# resolution layer landed on.
+# the terminal's depth (the NO_COLOR / --color policy). Tracks the term-color
+# default branch (tip).
 FetchContent_Declare(
   term_color
   GIT_REPOSITORY https://github.com/Kronuz/term-color.git
-  GIT_TAG        48069caadbfa6da3911d9828abd6583adead569f  # resolution layer (mode/target/apply)
+  GIT_TAG        main  # track tip
 )
 FetchContent_MakeAvailable(term_color)
 
