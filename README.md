@@ -43,8 +43,11 @@ FetchContent_MakeAvailable(logger)
 target_link_libraries(your_target PRIVATE logger::logger)
 ```
 
-That transitively pulls `scheduler` (and its `threadpool` + `stash`). The core
-needs nothing else.
+That transitively pulls `scheduler` (and its `threadpool` + `stash`) and
+`term-color`, whose stacked palette the sink resolves to the terminal's depth per
+line (the `collapse` / `apply` color policy). Everything *host-specific* stays
+out: exception description, real backtraces, thread names, and the timestamp
+format come through `LogHooks`, so the core needs nothing else.
 
 ## Usage
 
@@ -53,7 +56,7 @@ needs nothing else.
 
 int main() {
     Logging::config.log_level = LOG_INFO;        // emit INFO and more severe
-    Logging::config.colors = true;
+    Logging::config.color = LogColorMode::automatic;   // color on a tty, honors NO_COLOR
     Logging::add_handler(std::make_unique<StderrLogger>());
 
     L_INFO("starting up, {} workers", 8);
@@ -106,9 +109,15 @@ second identical once-line, which was deduped.
 
 ### `LogConfig` (`Logging::config`)
 
-`log_level` (emit when `priority <= log_level`), `colors`, `with_timestamp`,
-`with_threads`, `with_location`, and `max_pending` (backpressure: 0 = unbounded,
-otherwise routine async lines are dropped past it with a coalesced summary).
+`log_level` (emit when `priority <= log_level`), `color` (`LogColorMode`:
+`automatic` / `always` / `never`, mirroring a `--color` flag), `color_depth`
+(`LogColorDepth`: `automatic` / `ansi16` / `ansi256` / `truecolor` / `stacked`,
+the tier term-color's stacked escapes are collapsed to), `with_timestamp` plus
+`timestamp` (`LogTimestamp`), `precision` (`LogPrecision`), and
+`timestamp_gradient`, `with_threads`, `with_location`, `iterm2` (emit iTerm2 marks
+/ tab tint / badge when stderr is an iTerm2 terminal), `markers` (the per-priority
+severity bar), and `max_pending` (backpressure: 0 = unbounded, otherwise routine
+async lines are dropped past it with a coalesced summary).
 
 ### `LogHooks` (`Logging::hooks`)
 

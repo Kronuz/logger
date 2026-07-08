@@ -46,12 +46,16 @@ cmake --build build-tsan && ./build-tsan/logger_test
 - C++20. Double quotes in code. No em dashes in docs.
 - MIT-licensed; keep the copyright header (Copyright (c) 2015-2019 Dubalu LLC) on
   source files.
-- The core depends on `Kronuz/scheduler` and nothing else. Everything
-  host-specific (exception description, backtraces, thread names, timestamp
-  format) goes through `LogHooks`, not a new dependency. Do not pull `term-color`,
-  `located-exception`, etc. into the core; a consumer injects those via hooks.
-- Keep `Xapian::Error`, iTerm2 escapes, and real backtraces out of the core. They
-  belong in a consumer-side adapter (see EXTRACTION.md, Phase 6).
+- The core depends on `Kronuz/scheduler` and `Kronuz/term-color` (the palette plus
+  the `collapse`/`apply` resolution the sink runs per line) and nothing else.
+  Everything *host-specific* (exception description, real backtraces, thread names,
+  timestamp format) goes through `LogHooks`, not a new dependency. Do not pull
+  `located-exception`, `Xapian::Error`, etc. into the core; a consumer injects those
+  via hooks.
+- Keep `Xapian::Error` and real backtraces out of the core; they reach it through
+  `LogHooks` (a consumer-side adapter, see EXTRACTION.md). The iTerm2 integration
+  (marks / tab tint / badge / notifications, gated by `config.iterm2`) does ship in
+  the core: the extraction's open question was resolved in its favor.
 
 ## Load-bearing invariants
 
