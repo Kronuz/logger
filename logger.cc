@@ -27,6 +27,7 @@
                            // have its own colors.h on the include path; ansi_color.hh is
                            // unambiguous.
 #include "collapse.hh"     // term_color::collapse / detect_depth / apply
+#include "cppcodec/base64_rfc4648.hpp"   // base64 for the iTerm2 badge
 
 #include <cerrno>          // for errno, EINTR
 #include <cstdint>         // for uint8_t, uint32_t
@@ -184,38 +185,6 @@ detect_iterm2()
 	}
 	const char* lt = std::getenv("LC_TERMINAL");
 	return lt != nullptr && std::string_view(lt) == "iTerm2";
-}
-
-
-// Minimal RFC 4648 base64, for the iTerm2 badge (which wants base64 text). Kept
-// inline so the logger has no dependency beyond the scheduler stack.
-static std::string
-base64(std::string_view in)
-{
-	static const char tbl[] =
-		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-	std::string out;
-	out.reserve(((in.size() + 2) / 3) * 4);
-	size_t i = 0;
-	for (; i + 3 <= in.size(); i += 3) {
-		uint32_t n = (uint32_t(uint8_t(in[i])) << 16) | (uint32_t(uint8_t(in[i + 1])) << 8) | uint8_t(in[i + 2]);
-		out += tbl[(n >> 18) & 63];
-		out += tbl[(n >> 12) & 63];
-		out += tbl[(n >> 6) & 63];
-		out += tbl[n & 63];
-	}
-	if (i < in.size()) {
-		bool two = (i + 1 < in.size());
-		uint32_t n = uint32_t(uint8_t(in[i])) << 16;
-		if (two) {
-			n |= uint32_t(uint8_t(in[i + 1])) << 8;
-		}
-		out += tbl[(n >> 18) & 63];
-		out += tbl[(n >> 12) & 63];
-		out += two ? tbl[(n >> 6) & 63] : '=';
-		out += '=';
-	}
-	return out;
 }
 
 
@@ -846,7 +815,7 @@ Logging::tab_title(std::string_view title)
 void
 Logging::badge(std::string_view text)
 {
-	iterm2_emit(std::format("\033]1337;SetBadgeFormat={}\a", base64(text)));
+	iterm2_emit(std::format("\033]1337;SetBadgeFormat={}\a", cppcodec::base64_rfc4648::encode(text)));
 }
 
 void

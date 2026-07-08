@@ -29,9 +29,21 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(term_color)
 
+# cppcodec: a dedicated base64 codec (base64_rfc4648), used only in logger.cc for the
+# iTerm2 badge escape. Header-only; SOURCE_SUBDIR points at a non-existent dir so its
+# CMakeLists (which requests an old CMake policy) is not run -- we only need headers.
+if(NOT DEFINED cppcodec_SOURCE_DIR)
+  FetchContent_Declare(cppcodec
+    GIT_REPOSITORY https://github.com/tplgy/cppcodec.git
+    GIT_TAG        master
+    SOURCE_SUBDIR  do-not-configure)
+  FetchContent_MakeAvailable(cppcodec)
+endif()
+
 # --- Library target ---
 add_library(logger STATIC logger.cc)
 target_include_directories(logger PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(logger PRIVATE "${cppcodec_SOURCE_DIR}")
 target_compile_features(logger PUBLIC cxx_std_20)
 target_link_libraries(logger PUBLIC scheduler::scheduler term_color::term_color)
 add_library(logger::logger ALIAS logger)

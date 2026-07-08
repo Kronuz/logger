@@ -47,7 +47,8 @@ cmake --build build-tsan && ./build-tsan/logger_test
 - MIT-licensed; keep the copyright header (Copyright (c) 2015-2019 Dubalu LLC) on
   source files.
 - The core depends on `Kronuz/scheduler` and `Kronuz/term-color` (the palette plus
-  the `collapse`/`apply` resolution the sink runs per line) and nothing else.
+  the `collapse`/`apply` resolution the sink runs per line), plus `cppcodec`
+  (header-only) used only in `logger.cc` to base64-encode the iTerm2 badge text.
   Everything *host-specific* (exception description, real backtraces, thread names,
   timestamp format) goes through `LogHooks`, not a new dependency. Do not pull
   `located-exception`, `Xapian::Error`, etc. into the core; a consumer injects those
