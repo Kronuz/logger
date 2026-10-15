@@ -1,5 +1,7 @@
 # logger
 
+[![CI](https://github.com/Kronuz/logger/actions/workflows/ci.yml/badge.svg)](https://github.com/Kronuz/logger/actions/workflows/ci.yml)
+
 Deferred, lock-free logging built on the Kronuz
 [scheduler](https://github.com/Kronuz/scheduler) and
 [stash](https://github.com/Kronuz/stash) wheel. Extracted from
