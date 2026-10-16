@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Notes for agents and contributors working in this repo. For internal design see
-ARCHITECTURE.md; for usage see README.md; for the open ideas see IMPROVEMENTS.md.
+ARCHITECTURE.md; for usage see README.md and docs/API.md; for open design work see docs/ROADMAP.md.
 
 ## Repo map
 
@@ -54,7 +54,7 @@ cmake --build build-tsan && ./build-tsan/logger_test
   `located-exception`, `Xapian::Error`, etc. into the core; a consumer injects those
   via hooks.
 - Keep `Xapian::Error` and real backtraces out of the core; they reach it through
-  `LogHooks` (a consumer-side adapter, see EXTRACTION.md). The iTerm2 integration
+  `LogHooks` (a consumer-side adapter, as Xapiand's). The iTerm2 integration
   (marks / tab tint / badge / notifications, gated by `config.iterm2`) does ship in
   the core: the extraction's open question was resolved in its favor.
 
@@ -83,7 +83,7 @@ cmake --build build-tsan && ./build-tsan/logger_test
   macro block `#undef`s `L_EXC` before defining the real one. Keep that undef.
 - **`config` / `hooks` / `handlers` are read unsynchronized.** Install handlers
   and set config before logging starts. Mutating them while the LOG thread runs
-  is a data race (see IMPROVEMENTS.md).
+  is a data race (see docs/ROADMAP.md).
 - **Indent is captured at creation, on the producer thread.** `log_indent()` is
   `thread_local`; a line records the depth when it is built (on the producer),
   not when it fires (on the LOG thread). Keep the capture in the `Logging`

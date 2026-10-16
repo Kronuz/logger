@@ -1,40 +1,39 @@
 # logger
 
 [![CI](https://github.com/Kronuz/logger/actions/workflows/ci.yml/badge.svg)](https://github.com/Kronuz/logger/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 
-Deferred, lock-free logging built on the Kronuz
-[scheduler](https://github.com/Kronuz/scheduler) and
-[stash](https://github.com/Kronuz/stash) wheel. Extracted from
-[Xapiand](https://github.com/Kronuz/Xapiand), where it is the original reason the
-wheel exists.
+Lock-free, deferred logging for C++20: many threads log without blocking each
+other, one thread writes in order, and a "this is taking too long" line can be
+armed and cancelled with one atomic, so fast operations log nothing. For
+servers that want to log slow operations only.
 
-## What it is
+![logger: the demo's colored output, one marker per severity](docs/logger.svg)
 
-Many threads arm log lines without ever blocking each other; a single thread
-drains them and writes them in order; and a scheduled "this is taking too long"
-line can be cancelled with one atomic when the operation finishes in time, so the
-common case logs nothing. That last part is the point: it is built for *log slow
-ops only*, and for any pattern where you arm a timed line and usually cancel it.
+## ✨ Highlights
 
-A line takes one of three paths (see [ARCHITECTURE.md](ARCHITECTURE.md)): the
-severe levels write inline on the calling thread; routine levels are handed to
-the LOG thread keyed at *now*; deferred lines are keyed at *now + delay* and fire
-only if not cancelled first.
+- **Never blocks the caller.** Routine lines are handed to the log thread through
+  the lock-free [stash](https://github.com/Kronuz/stash) wheel; severe lines
+  write immediately.
+- **Log slow operations only.** `L_DELAYED_200("request {} is slow", id)` fires
+  only if it is not cancelled within 200 ms, annotated with how long it ran.
+- **`std::format` messages**, and arguments are not even evaluated below the
+  log level.
+- **Once, once per minute, stacked indentation, and timed lines.**
+- **Terminal-aware color** through [term-color](https://github.com/Kronuz/term-color):
+  honors `--color`-style modes and `NO_COLOR`, with iTerm2 marks and badges.
+- **Backpressure.** `max_pending` drops routine lines past a cap and reports how
+  many.
+- **Hooks for the host**: exception descriptions, backtraces, thread names, and
+  timestamps.
 
-## When to use it / when not
+## 📦 Installation
 
-Use it when logging is on a hot path with many threads, when you want slow-path
-or debounced lines that you arm and usually cancel, and when one thread writing
-ordered output is what you want. It depends only on the scheduler.
-
-Reach for something simpler if you have a single thread, or no notion of *when*,
-or you need pluggable structured-logging sinks and severity routing beyond what
-`Logger` handlers give you. This is a fast, lock-free arm with a deferred-cancel
-trick, not a full logging framework.
-
-## Install
-
-Header + one source file, consumed via CMake `FetchContent`:
+Requires a C++20 compiler and CMake 3.14 or newer; it fetches
+[scheduler](https://github.com/Kronuz/scheduler) (with threadpool and stash) and
+term-color, and compiles one source file. CI builds it on Linux (x86_64, arm64),
+macOS (arm64, x86_64), and FreeBSD, plus ASan, UBSan, and TSan builds.
 
 ```cmake
 include(FetchContent)
@@ -42,110 +41,69 @@ FetchContent_Declare(logger
   GIT_REPOSITORY https://github.com/Kronuz/logger.git
   GIT_TAG        main)
 FetchContent_MakeAvailable(logger)
-target_link_libraries(your_target PRIVATE logger::logger)
+
+target_link_libraries(my_app PRIVATE logger::logger)
 ```
 
-That transitively pulls `scheduler` (and its `threadpool` + `stash`) and
-`term-color`, whose stacked palette the sink resolves to the terminal's depth per
-line (the `collapse` / `apply` color policy). Everything *host-specific* stays
-out: exception description, real backtraces, thread names, and the timestamp
-format come through `LogHooks`, so the core needs nothing else.
-
-## Usage
+## 🚀 Quick start
 
 ```cpp
 #include "logger.h"
 
+void handle_request(int);   // your code
+void risky();
+
 int main() {
-    Logging::config.log_level = LOG_INFO;        // emit INFO and more severe
-    Logging::config.color = LogColorMode::automatic;   // color on a tty, honors NO_COLOR
-    Logging::add_handler(std::make_unique<StderrLogger>());
+	Logging::config.log_level = LOG_INFO;
+	Logging::add_handler(std::make_unique<StderrLogger>());
 
-    L_INFO("starting up, {} workers", 8);
-    L_WARNING("disk at {}%", 91);
+	L_INFO("starting up, {} workers", 8);
 
-    {
-        // Arm a "too slow" line 200ms out; cancel it if we finish in time.
-        L_DELAYED_200("request {} is slow", req_id);
-        handle_request(req_id);
-        L_DELAYED_N_CLEAR();   // finished in time -> the line never prints
-    }
+	{
+		L_DELAYED_200("request {} is slow", 42);   // armed for 200 ms
+		handle_request(42);
+		L_DELAYED_N_CLEAR();                      // fast enough: never prints
+	}
 
-    try { risky(); }
-    catch (...) { L_EXC("risky() failed"); }     // logs the in-flight exception
-
-    Logging::finish();   // drain and stop the LOG thread before exit
+	try { risky(); } catch (...) { L_EXC("risky() failed"); }   // logs the exception
+	Logging::finish();                                          // drain before exit
 }
 ```
 
-The bundled [`examples/demo.cc`](examples/demo.cc) is a runnable tour, built by a
-top-level CMake build:
+[`examples/demo.cc`](examples/demo.cc) tours every level, deferred lines, once
+dedup, stacked indentation, and the iTerm2 integration.
+
+## 🎯 When to use it
+
+- ✅ Logging from many threads on hot paths, with ordered output.
+- ✅ "Warn me only if this is slow" around requests, commits, or locks.
+- ❌ Structured logging (JSON fields, log shipping): sinks receive formatted
+  text lines.
+- ❌ A single-threaded tool: plain `std::fprintf(stderr, …)` is simpler.
+
+## 📚 Documentation
+
+- [docs/API.md](docs/API.md): `LogConfig`, `LogHooks`, sinks, the macros, and the
+  `Log` handle.
+- [ARCHITECTURE.md](ARCHITECTURE.md): the three paths a line takes, and how
+  cancel and swap work.
+- [docs/ROADMAP.md](docs/ROADMAP.md): open design work, such as isolating slow
+  sinks.
+- [AGENTS.md](AGENTS.md): repository map, invariants, and traps.
+
+## 🛠️ Building and testing
 
 ```sh
-cmake -B build && cmake --build build && ./build/logger_demo
+cmake -B build && cmake --build build && ctest --test-dir build
+./build/logger_demo
 ```
 
-It tours the severity palette (each level's rgb marker, brightest = most severe),
-the grey-gradient timestamp, `std::format` messages, exception logging, once-dedup,
-stacked indentation, the deferred "log slow ops only" pattern, and the iTerm2
-integration. Colorized on a tty (the demo forces it on); abbreviated here:
+## 🤝 Contributing
 
-```
-█ 2026-06-29 08:55:43.557 L_EMERG   system is unusable
-▉ 2026-06-29 08:55:43.557 L_ALERT   action must be taken immediately
-▊ 2026-06-29 08:55:43.557 L_CRIT    critical condition
-▋ 2026-06-29 08:55:43.557 L_ERR     error condition
-▌ 2026-06-29 08:55:43.557 L_WARNING warning condition
-▍ 2026-06-29 08:55:43.557 L_NOTICE  normal but significant
-▎ 2026-06-29 08:55:43.558 L_INFO    informational
-▊ 2026-06-29 08:55:43.558 caught while doing work: something broke
-▎ 2026-06-29 08:55:43.558   item A
-▌ 2026-06-29 08:55:43.583 slow_op is taking too long ~201.7ms
-```
+Issues and pull requests are welcome. Read [AGENTS.md](AGENTS.md) first. CI must
+pass on every platform.
 
-Note what is *not* there: `fast_op`'s "too long" line, because it finished in time
-and cancelled it (`slow_op`'s fired, annotated with how long it ran), and the
-second identical once-line, which was deduped.
+## 📄 License
 
-## API reference
-
-### `LogConfig` (`Logging::config`)
-
-`log_level` (emit when `priority <= log_level`), `color` (`LogColorMode`:
-`automatic` / `always` / `never`, mirroring a `--color` flag), `color_depth`
-(`LogColorDepth`: `automatic` / `ansi16` / `ansi256` / `truecolor` / `stacked`,
-the tier term-color's stacked escapes are collapsed to), `with_timestamp` plus
-`timestamp` (`LogTimestamp`), `precision` (`LogPrecision`), and
-`timestamp_gradient`, `with_threads`, `with_location`, `iterm2` (emit iTerm2 marks
-/ tab tint / badge when stderr is an iTerm2 terminal), `markers` (the per-priority
-severity bar), and `max_pending` (backpressure: 0 = unbounded, otherwise routine
-async lines are dropped past it with a coalesced summary).
-
-### `LogHooks` (`Logging::hooks`)
-
-Optional, each with a std default: `describe_exception`, `backtrace`,
-`thread_name`, `timestamp`. A host injects richer versions (e.g. real backtraces,
-named threads) without the core depending on them.
-
-### Sinks (`Logger`)
-
-`StreamLogger` (a file), `StderrLogger` (tty-aware), `SysLog`. Install with
-`Logging::add_handler(...)`; every line fans out to all of them.
-
-### Macros
-
-`L_INFO` / `L_NOTICE` / `L_WARNING` / `L_ERR` / `L_CRIT` / `L_ALERT` / `L_EMERG`,
-`L_EXC` (the in-flight exception), the `*_ONCE` and `*_ONCE_PER_MINUTE` variants,
-`L_DELAYED_*` with `L_DELAYED_N_UNLOG` / `L_DELAYED_N_CLEAR`, `L_TIMED`,
-`L_STACKED` (nested indent), `L_PRINT` (undecorated), and `L_DEBUG` (compiled out
-unless `LOGGER_DEBUG`). A line below the level evaluates none of its arguments.
-
-### The `Log` handle
-
-Returned by the deferred macros. `clear()` cancels the pending line; `unlog()`
-swaps its message; `age()` reports how long it lived. Dropping the handle runs
-the cancel/swap.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+MIT, Copyright (c) 2015-2019 Dubalu LLC. See [LICENSE](LICENSE). Extracted from
+[Xapiand](https://github.com/Kronuz/Xapiand), which now builds on this library.

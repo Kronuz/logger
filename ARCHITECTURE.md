@@ -8,8 +8,8 @@ hot path and a lot of it is cancelled before it ever runs.
 This documents how the logger actually works, because the shape is a little
 different from what you would guess. It is the design this library implements; it
 mirrors the logger as it runs in Xapiand, with the host-specific parts (exception
-description, backtraces, named threads) moved behind hooks. The extraction plan
-and status are in [EXTRACTION.md](EXTRACTION.md).
+description, backtraces, named threads) moved behind hooks.
+
 
 ## The three paths a log line can take
 

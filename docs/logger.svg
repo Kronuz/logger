@@ -1,0 +1,230 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="811" height="364" viewBox="0 0 811 364">
+<rect width="811" height="364" rx="10" fill="#1f2329"/>
+<circle cx="20" cy="18" r="6" fill="#ff5f57"/><circle cx="40" cy="18" r="6" fill="#febc2e"/><circle cx="60" cy="18" r="6" fill="#28c840"/>
+<text x="405.5" y="22" fill="#8a919c" font-family="Menlo, Consolas, monospace" font-size="12" text-anchor="middle">logger_demo</text>
+<g font-family="Menlo, Consolas, DejaVu Sans Mono, monospace" font-size="14" fill="#d8dee9" xml:space="preserve">
+<text x="18.0" y="56" fill="#ee5253">█</text>
+<text x="26.4" y="56" fill="#5e5e5e">2026</text>
+<text x="60.1" y="56" fill="#3c3c3c">-</text>
+<text x="68.6" y="56" fill="#5e5e5e">10</text>
+<text x="85.4" y="56" fill="#3c3c3c">-</text>
+<text x="93.9" y="56" fill="#5e5e5e">16</text>
+<text x="110.7" y="56" fill="#3c3c3c"> </text>
+<text x="119.2" y="56" fill="#5e5e5e">06</text>
+<text x="136.0" y="56" fill="#3c3c3c">:</text>
+<text x="144.4" y="56" fill="#5e5e5e">08</text>
+<text x="161.3" y="56" fill="#3c3c3c">:</text>
+<text x="169.7" y="56" fill="#5e5e5e">00</text>
+<text x="186.6" y="56" fill="#3c3c3c">.159 (0x7ff845a701c0) </text>
+<text x="372.1" y="56" >L_EMERG   system is unusable</text>
+<text x="18.0" y="75" fill="#3f77b3">▎</text>
+<text x="26.4" y="75" fill="#5e5e5e">2026</text>
+<text x="60.1" y="75" fill="#3c3c3c">-</text>
+<text x="68.6" y="75" fill="#5e5e5e">10</text>
+<text x="85.4" y="75" fill="#3c3c3c">-</text>
+<text x="93.9" y="75" fill="#5e5e5e">16</text>
+<text x="110.7" y="75" fill="#3c3c3c"> </text>
+<text x="119.2" y="75" fill="#5e5e5e">06</text>
+<text x="136.0" y="75" fill="#3c3c3c">:</text>
+<text x="144.4" y="75" fill="#5e5e5e">08</text>
+<text x="161.3" y="75" fill="#3c3c3c">:</text>
+<text x="169.7" y="75" fill="#5e5e5e">00</text>
+<text x="186.6" y="75" fill="#3c3c3c">.158 (0x7ff845a701c0) </text>
+<text x="372.1" y="75" >the severity palette, brightest bar = most severe:</text>
+<text x="18.0" y="94" fill="#ee5253">▉</text>
+<text x="26.4" y="94" fill="#5e5e5e">2026</text>
+<text x="60.1" y="94" fill="#3c3c3c">-</text>
+<text x="68.6" y="94" fill="#5e5e5e">10</text>
+<text x="85.4" y="94" fill="#3c3c3c">-</text>
+<text x="93.9" y="94" fill="#5e5e5e">16</text>
+<text x="110.7" y="94" fill="#3c3c3c"> </text>
+<text x="119.2" y="94" fill="#5e5e5e">06</text>
+<text x="136.0" y="94" fill="#3c3c3c">:</text>
+<text x="144.4" y="94" fill="#5e5e5e">08</text>
+<text x="161.3" y="94" fill="#3c3c3c">:</text>
+<text x="169.7" y="94" fill="#5e5e5e">00</text>
+<text x="186.6" y="94" fill="#3c3c3c">.159 (0x7ff845a701c0) </text>
+<text x="372.1" y="94" >L_ALERT   action must be taken immediately</text>
+<text x="18.0" y="113" fill="#ee5253">▊</text>
+<text x="26.4" y="113" fill="#5e5e5e">2026</text>
+<text x="60.1" y="113" fill="#3c3c3c">-</text>
+<text x="68.6" y="113" fill="#5e5e5e">10</text>
+<text x="85.4" y="113" fill="#3c3c3c">-</text>
+<text x="93.9" y="113" fill="#5e5e5e">16</text>
+<text x="110.7" y="113" fill="#3c3c3c"> </text>
+<text x="119.2" y="113" fill="#5e5e5e">06</text>
+<text x="136.0" y="113" fill="#3c3c3c">:</text>
+<text x="144.4" y="113" fill="#5e5e5e">08</text>
+<text x="161.3" y="113" fill="#3c3c3c">:</text>
+<text x="169.7" y="113" fill="#5e5e5e">00</text>
+<text x="186.6" y="113" fill="#3c3c3c">.159 (0x7ff845a701c0) </text>
+<text x="372.1" y="113" >L_CRIT    critical condition</text>
+<text x="18.0" y="132" fill="#b33939">▋</text>
+<text x="26.4" y="132" fill="#5e5e5e">2026</text>
+<text x="60.1" y="132" fill="#3c3c3c">-</text>
+<text x="68.6" y="132" fill="#5e5e5e">10</text>
+<text x="85.4" y="132" fill="#3c3c3c">-</text>
+<text x="93.9" y="132" fill="#5e5e5e">16</text>
+<text x="110.7" y="132" fill="#3c3c3c"> </text>
+<text x="119.2" y="132" fill="#5e5e5e">06</text>
+<text x="136.0" y="132" fill="#3c3c3c">:</text>
+<text x="144.4" y="132" fill="#5e5e5e">08</text>
+<text x="161.3" y="132" fill="#3c3c3c">:</text>
+<text x="169.7" y="132" fill="#5e5e5e">00</text>
+<text x="186.6" y="132" fill="#3c3c3c">.159 (0x7ff845a701c0) </text>
+<text x="372.1" y="132" >L_ERR     error condition</text>
+<text x="18.0" y="151" fill="#ffb142">▌</text>
+<text x="26.4" y="151" fill="#5e5e5e">2026</text>
+<text x="60.1" y="151" fill="#3c3c3c">-</text>
+<text x="68.6" y="151" fill="#5e5e5e">10</text>
+<text x="85.4" y="151" fill="#3c3c3c">-</text>
+<text x="93.9" y="151" fill="#5e5e5e">16</text>
+<text x="110.7" y="151" fill="#3c3c3c"> </text>
+<text x="119.2" y="151" fill="#5e5e5e">06</text>
+<text x="136.0" y="151" fill="#3c3c3c">:</text>
+<text x="144.4" y="151" fill="#5e5e5e">08</text>
+<text x="161.3" y="151" fill="#3c3c3c">:</text>
+<text x="169.7" y="151" fill="#5e5e5e">00</text>
+<text x="186.6" y="151" fill="#3c3c3c">.159 (0x7ff845a701c0) </text>
+<text x="372.1" y="151" >L_WARNING warning condition</text>
+<text x="18.0" y="170" fill="#74b9ff">▍</text>
+<text x="26.4" y="170" fill="#5e5e5e">2026</text>
+<text x="60.1" y="170" fill="#3c3c3c">-</text>
+<text x="68.6" y="170" fill="#5e5e5e">10</text>
+<text x="85.4" y="170" fill="#3c3c3c">-</text>
+<text x="93.9" y="170" fill="#5e5e5e">16</text>
+<text x="110.7" y="170" fill="#3c3c3c"> </text>
+<text x="119.2" y="170" fill="#5e5e5e">06</text>
+<text x="136.0" y="170" fill="#3c3c3c">:</text>
+<text x="144.4" y="170" fill="#5e5e5e">08</text>
+<text x="161.3" y="170" fill="#3c3c3c">:</text>
+<text x="169.7" y="170" fill="#5e5e5e">00</text>
+<text x="186.6" y="170" fill="#3c3c3c">.159 (0x7ff845a701c0) </text>
+<text x="372.1" y="170" >L_NOTICE  normal but significant</text>
+<text x="18.0" y="189" fill="#3f77b3">▎</text>
+<text x="26.4" y="189" fill="#5e5e5e">2026</text>
+<text x="60.1" y="189" fill="#3c3c3c">-</text>
+<text x="68.6" y="189" fill="#5e5e5e">10</text>
+<text x="85.4" y="189" fill="#3c3c3c">-</text>
+<text x="93.9" y="189" fill="#5e5e5e">16</text>
+<text x="110.7" y="189" fill="#3c3c3c"> </text>
+<text x="119.2" y="189" fill="#5e5e5e">06</text>
+<text x="136.0" y="189" fill="#3c3c3c">:</text>
+<text x="144.4" y="189" fill="#5e5e5e">08</text>
+<text x="161.3" y="189" fill="#3c3c3c">:</text>
+<text x="169.7" y="189" fill="#5e5e5e">00</text>
+<text x="186.6" y="189" fill="#3c3c3c">.159 (0x7ff845a701c0) </text>
+<text x="372.1" y="189" >L_INFO    informational</text>
+<text x="18.0" y="208" fill="#74b9ff">▍</text>
+<text x="26.4" y="208" fill="#5e5e5e">2026</text>
+<text x="60.1" y="208" fill="#3c3c3c">-</text>
+<text x="68.6" y="208" fill="#5e5e5e">10</text>
+<text x="85.4" y="208" fill="#3c3c3c">-</text>
+<text x="93.9" y="208" fill="#5e5e5e">16</text>
+<text x="110.7" y="208" fill="#3c3c3c"> </text>
+<text x="119.2" y="208" fill="#5e5e5e">06</text>
+<text x="136.0" y="208" fill="#3c3c3c">:</text>
+<text x="144.4" y="208" fill="#5e5e5e">08</text>
+<text x="161.3" y="208" fill="#3c3c3c">:</text>
+<text x="169.7" y="208" fill="#5e5e5e">00</text>
+<text x="186.6" y="208" fill="#3c3c3c">.162 (0x7ff845a701c0) </text>
+<text x="372.1" y="208" >formatted: answer = 42, 99.50% done</text>
+<text x="18.0" y="227" fill="#ee5253">▊</text>
+<text x="26.4" y="227" fill="#5e5e5e">2026</text>
+<text x="60.1" y="227" fill="#3c3c3c">-</text>
+<text x="68.6" y="227" fill="#5e5e5e">10</text>
+<text x="85.4" y="227" fill="#3c3c3c">-</text>
+<text x="93.9" y="227" fill="#5e5e5e">16</text>
+<text x="110.7" y="227" fill="#3c3c3c"> </text>
+<text x="119.2" y="227" fill="#5e5e5e">06</text>
+<text x="136.0" y="227" fill="#3c3c3c">:</text>
+<text x="144.4" y="227" fill="#5e5e5e">08</text>
+<text x="161.3" y="227" fill="#3c3c3c">:</text>
+<text x="169.7" y="227" fill="#5e5e5e">00</text>
+<text x="186.6" y="227" fill="#3c3c3c">.162 (0x7ff845a701c0) </text>
+<text x="372.1" y="227" >caught while doing work: something broke</text>
+<text x="18.0" y="246" fill="#3f77b3">▎</text>
+<text x="26.4" y="246" fill="#5e5e5e">2026</text>
+<text x="60.1" y="246" fill="#3c3c3c">-</text>
+<text x="68.6" y="246" fill="#5e5e5e">10</text>
+<text x="85.4" y="246" fill="#3c3c3c">-</text>
+<text x="93.9" y="246" fill="#5e5e5e">16</text>
+<text x="110.7" y="246" fill="#3c3c3c"> </text>
+<text x="119.2" y="246" fill="#5e5e5e">06</text>
+<text x="136.0" y="246" fill="#3c3c3c">:</text>
+<text x="144.4" y="246" fill="#5e5e5e">08</text>
+<text x="161.3" y="246" fill="#3c3c3c">:</text>
+<text x="169.7" y="246" fill="#5e5e5e">00</text>
+<text x="186.6" y="246" fill="#3c3c3c">.162 (0x7ff845a701c0) </text>
+<text x="372.1" y="246" >this once-line prints only the first time</text>
+<text x="18.0" y="265" fill="#3f77b3">▎</text>
+<text x="26.4" y="265" fill="#5e5e5e">2026</text>
+<text x="60.1" y="265" fill="#3c3c3c">-</text>
+<text x="68.6" y="265" fill="#5e5e5e">10</text>
+<text x="85.4" y="265" fill="#3c3c3c">-</text>
+<text x="93.9" y="265" fill="#5e5e5e">16</text>
+<text x="110.7" y="265" fill="#3c3c3c"> </text>
+<text x="119.2" y="265" fill="#5e5e5e">06</text>
+<text x="136.0" y="265" fill="#3c3c3c">:</text>
+<text x="144.4" y="265" fill="#5e5e5e">08</text>
+<text x="161.3" y="265" fill="#3c3c3c">:</text>
+<text x="169.7" y="265" fill="#5e5e5e">00</text>
+<text x="186.6" y="265" fill="#3c3c3c">.162 (0x7ff845a701c0) </text>
+<text x="372.1" y="265" >processing batch</text>
+<text x="18.0" y="284" fill="#3f77b3">▎</text>
+<text x="26.4" y="284" fill="#5e5e5e">2026</text>
+<text x="60.1" y="284" fill="#3c3c3c">-</text>
+<text x="68.6" y="284" fill="#5e5e5e">10</text>
+<text x="85.4" y="284" fill="#3c3c3c">-</text>
+<text x="93.9" y="284" fill="#5e5e5e">16</text>
+<text x="110.7" y="284" fill="#3c3c3c"> </text>
+<text x="119.2" y="284" fill="#5e5e5e">06</text>
+<text x="136.0" y="284" fill="#3c3c3c">:</text>
+<text x="144.4" y="284" fill="#5e5e5e">08</text>
+<text x="161.3" y="284" fill="#3c3c3c">:</text>
+<text x="169.7" y="284" fill="#5e5e5e">00</text>
+<text x="186.6" y="284" fill="#3c3c3c">.162 (0x7ff845a701c0) </text>
+<text x="372.1" y="284" >  item A</text>
+<text x="18.0" y="303" fill="#3f77b3">▎</text>
+<text x="26.4" y="303" fill="#5e5e5e">2026</text>
+<text x="60.1" y="303" fill="#3c3c3c">-</text>
+<text x="68.6" y="303" fill="#5e5e5e">10</text>
+<text x="85.4" y="303" fill="#3c3c3c">-</text>
+<text x="93.9" y="303" fill="#5e5e5e">16</text>
+<text x="110.7" y="303" fill="#3c3c3c"> </text>
+<text x="119.2" y="303" fill="#5e5e5e">06</text>
+<text x="136.0" y="303" fill="#3c3c3c">:</text>
+<text x="144.4" y="303" fill="#5e5e5e">08</text>
+<text x="161.3" y="303" fill="#3c3c3c">:</text>
+<text x="169.7" y="303" fill="#5e5e5e">00</text>
+<text x="186.6" y="303" fill="#3c3c3c">.162 (0x7ff845a701c0) </text>
+<text x="372.1" y="303" >  item B</text>
+<text x="18.0" y="322" fill="#ffb142">▌</text>
+<text x="26.4" y="322" fill="#5e5e5e">2026</text>
+<text x="60.1" y="322" fill="#3c3c3c">-</text>
+<text x="68.6" y="322" fill="#5e5e5e">10</text>
+<text x="85.4" y="322" fill="#3c3c3c">-</text>
+<text x="93.9" y="322" fill="#5e5e5e">16</text>
+<text x="110.7" y="322" fill="#3c3c3c"> </text>
+<text x="119.2" y="322" fill="#5e5e5e">06</text>
+<text x="136.0" y="322" fill="#3c3c3c">:</text>
+<text x="144.4" y="322" fill="#5e5e5e">08</text>
+<text x="161.3" y="322" fill="#3c3c3c">:</text>
+<text x="169.7" y="322" fill="#5e5e5e">00</text>
+<text x="186.6" y="322" fill="#3c3c3c">.188 (0x7ff845a701c0) </text>
+<text x="372.1" y="322" >slow_op is taking too long ~208.8ms</text>
+<text x="18.0" y="341" fill="#3f77b3">▎</text>
+<text x="26.4" y="341" fill="#5e5e5e">2026</text>
+<text x="60.1" y="341" fill="#3c3c3c">-</text>
+<text x="68.6" y="341" fill="#5e5e5e">10</text>
+<text x="85.4" y="341" fill="#3c3c3c">-</text>
+<text x="93.9" y="341" fill="#5e5e5e">16</text>
+<text x="110.7" y="341" fill="#3c3c3c"> </text>
+<text x="119.2" y="341" fill="#5e5e5e">06</text>
+<text x="136.0" y="341" fill="#3c3c3c">:</text>
+<text x="144.4" y="341" fill="#5e5e5e">08</text>
+<text x="161.3" y="341" fill="#3c3c3c">:</text>
+<text x="169.7" y="341" fill="#5e5e5e">00</text>
+<text x="186.6" y="341" fill="#3c3c3c">.548 (0x7ff845a701c0) </text>
+<text x="372.1" y="341" >logger demo done</text>
+</g></svg>
