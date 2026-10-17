@@ -13,7 +13,7 @@ include(FetchContent)
 FetchContent_Declare(
   scheduler
   GIT_REPOSITORY https://github.com/Kronuz/scheduler.git
-  GIT_TAG        main  # track tip
+  GIT_TAG        fb464cb39256057b321c3a8837a7dab2fe1e09b7
 )
 FetchContent_MakeAvailable(scheduler)
 
@@ -25,7 +25,7 @@ FetchContent_MakeAvailable(scheduler)
 FetchContent_Declare(
   term_color
   GIT_REPOSITORY https://github.com/Kronuz/term-color.git
-  GIT_TAG        main  # track tip
+  GIT_TAG        534e30905b1a40ae1f18dbde46b039dd4333747b
 )
 FetchContent_MakeAvailable(term_color)
 
