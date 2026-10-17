@@ -9,7 +9,8 @@ the tier term-color's stacked escapes are collapsed to), `with_timestamp` plus
 `timestamp` (`LogTimestamp`), `precision` (`LogPrecision`), and
 `timestamp_gradient`, `with_threads`, `with_location`, `iterm2` (emit iTerm2 marks
 / tab tint / badge when stderr is an iTerm2 terminal), `markers` (the per-priority
-severity bar), and `max_pending` (backpressure: 0 = unbounded, otherwise routine
+severity bar), `tint` (color each message in its severity's palette color, as Xapiand's
+lines read; off by default), and `max_pending` (backpressure: 0 = unbounded, otherwise routine
 async lines are dropped past it with a coalesced summary).
 
 ## `LogHooks` (`Logging::hooks`)

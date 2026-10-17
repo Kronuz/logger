@@ -92,6 +92,19 @@ static const std::string priorities[MAX_LOG_PRIORITY + 1] = {
 };
 
 
+// The palette's colors alone, for config.tint.
+static const std::string tints[MAX_LOG_PRIORITY] = {
+	std::string(std::string_view(rgb(238, 82, 83))),   // LOG_EMERG
+	std::string(std::string_view(rgb(238, 82, 83))),   // LOG_ALERT
+	std::string(std::string_view(rgb(238, 82, 83))),   // LOG_CRIT
+	std::string(std::string_view(rgb(179, 57, 57))),   // LOG_ERR
+	std::string(std::string_view(rgb(255, 177, 66))),  // LOG_WARNING
+	std::string(std::string_view(rgb(116, 185, 255))), // LOG_NOTICE
+	std::string(std::string_view(rgb(63, 119, 179))),  // LOG_INFO
+	std::string(std::string_view(rgb(105, 105, 105))), // LOG_DEBUG
+};
+
+
 // Grey ramp for the timestamp gradient, as term-color stacked escapes (collapsed
 // per-terminal by render()). default_timestamp() picks among these per digit group.
 static const std::string kGrey60 {std::string_view(rgb( 60,  60,  60))};
@@ -627,6 +640,7 @@ Logging::operator()()
 	if (indent > 0) {
 		msg.append(static_cast<size_t>(indent) * 2, ' ');
 	}
+	if (config.tint && priority >= 0 && priority < MAX_LOG_PRIORITY) { msg += tints[priority]; }
 	msg += str;
 
 	if (eptr) {

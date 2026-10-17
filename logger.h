@@ -97,6 +97,10 @@ struct LogConfig {
 	// to the built-in palette; a host can install richer (e.g. truecolor) markers.
 	std::array<std::string, MAX_LOG_PRIORITY + 1> markers{};
 
+	// Color each message in its severity's palette color (the markers' colors), as
+	// Xapiand's lines read. Colors inside a message still apply after it.
+	bool tint = false;
+
 	// Backpressure. 0 = unbounded. Otherwise, once this many lines are pending on
 	// the wheel, routine async lines (NOTICE and below severity, non-deferred) are
 	// dropped instead of queued, and a coalesced "dropped N" summary is emitted.
