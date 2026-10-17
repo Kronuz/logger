@@ -96,7 +96,12 @@ int main() {
 	{
 		auto h = Logging::do_log(true, in_ms(30), true, LOG_WARNING, "SLOW_TIMEOUT_MARKER");
 		h.unlog(LOG_NOTICE, "SLOW_DONE_MARKER");
-		std::this_thread::sleep_for(120ms);  // let the timeout fire first
+		// Let the timeout fire first: wait for its line (the sink writes unbuffered), not a
+		// fixed time a loaded runner can overrun.
+		for (auto until = std::chrono::steady_clock::now() + 5s;
+			slurp(path).find("SLOW_TIMEOUT_MARKER") == std::string::npos && std::chrono::steady_clock::now() < until;) {
+			std::this_thread::sleep_for(10ms);
+		}
 		// handle drops here, after the timeout fired: swap is emitted.
 	}
 
