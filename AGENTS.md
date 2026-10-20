@@ -84,6 +84,14 @@ cmake --build build-tsan && ./build-tsan/logger_test
 - **`config` / `hooks` / `handlers` are read unsynchronized.** Install handlers
   and set config before logging starts. Mutating them while the LOG thread runs
   is a data race (see docs/ROADMAP.md).
+- **A refused line keeps its meaning.** `Logging::add` checks the scheduler's
+  `add` result. On false (shutdown, or past the 24 h horizon) it undoes
+  `scheduled` and the `pending` increment, then: a future `clears` watchdog stays
+  armed with `refused_deadline`, and its cancel point (`clean()` or `clear()`)
+  writes it only if the deadline has passed; a line already due, or a severe one
+  (priority above `NOTICE`), is written inline now; a routine future line that
+  does not clear is lost (no cancel point). Never write a refused watchdog early:
+  it would log every fast operation.
 - **Indent is captured at creation, on the producer thread.** `log_indent()` is
   `thread_local`; a line records the depth when it is built (on the producer),
   not when it fires (on the LOG thread). Keep the capture in the `Logging`

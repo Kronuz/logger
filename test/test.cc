@@ -63,12 +63,29 @@ int main() {
 	// --- Phase 1: immediate fan-out -------------------------------------
 	Logging::log(LOG_WARNING, "IMMEDIATE_MARKER");
 
+	// --- Refusals past the horizon, before anything is scheduled ---------
+	// Past the scheduler's 24 h horizon every kind is refused while it runs. A
+	// watchdog for fast work is discarded like a cancelled one; a severe deferred
+	// line is written now; a routine deferred line that does not clear is lost.
+	{
+		CHECK(Logging::pending_count() == 0);   // nothing scheduled yet
+		{
+			auto h = Logging::do_log(true, std::chrono::steady_clock::now() + 48h, true, LOG_WARNING, "HORIZON_FAST_MARKER");
+			CHECK(Logging::pending_count() == 0);   // armed off the wheel: not counted
+		}
+		Logging::do_log(false, std::chrono::steady_clock::now() + 48h, true, LOG_ERR, "HORIZON_SEVERE_MARKER");
+		CHECK(slurp(path).find("HORIZON_SEVERE_MARKER") != std::string::npos);
+		Logging::do_log(false, std::chrono::steady_clock::now() + 48h, true, LOG_INFO, "HORIZON_ROUTINE_MARKER");
+		CHECK(Logging::pending_count() == 0);   // every refusal undid its count
+	}
+
 	// --- Phase 2: routing -----------------------------------------------
 	{
 		auto h = Logging::do_log(true, in_ms(200), true, LOG_WARNING, "CANCELLED_MARKER");
 		h.clear();  // cancelled before it fires -> silent
 	}
 	auto kept = Logging::do_log(true, in_ms(100), true, LOG_WARNING, "FIRED_MARKER");  // outlives delay -> fires
+	CHECK(slurp(path).find("FIRED_MARKER") == std::string::npos);  // still deferred, not written inline
 	{
 		auto h = Logging::do_log(false, std::chrono::steady_clock::now(), true, LOG_INFO, "ASYNC_MARKER");
 	}
@@ -142,6 +159,41 @@ int main() {
 	std::this_thread::sleep_for(300ms);  // let async/deferred lines fire
 	Logging::finish();                   // drain + join the LOG thread
 
+	// After shutdown the scheduler refuses new lines, by kind. Async ones are due,
+	// so they are written inline, routine or not; a severe deferred one is written
+	// now; a routine deferred one that does not clear is lost.
+	auto p_finish = Logging::pending_count();
+	L_WARNING("AFTER_FINISH_MARKER");
+	L_NOTICE("AFTER_FINISH_ROUTINE_MARKER");
+	Logging::do_log(false, in_ms(200), true, LOG_ERR, "AFTER_FINISH_SEVERE_MARKER");
+	CHECK(slurp(path).find("AFTER_FINISH_SEVERE_MARKER") != std::string::npos);
+	Logging::do_log(false, in_ms(200), true, LOG_INFO, "AFTER_FINISH_DEFERRED_MARKER");
+	// A refused watchdog for fast work never appears.
+	{
+		auto h = Logging::do_log(true, in_ms(200), true, LOG_WARNING, "REFUSED_FAST_MARKER");
+		h.unlog(LOG_NOTICE, "REFUSED_FAST_DONE_MARKER");
+	}
+	// A refused watchdog whose work outlasts the delay appears once, at completion,
+	// followed by its swap.
+	{
+		auto h = Logging::do_log(true, in_ms(30), true, LOG_WARNING, "REFUSED_SLOW_MARKER");
+		h.unlog(LOG_NOTICE, "REFUSED_SLOW_DONE_MARKER");
+		CHECK(Logging::pending_count() == p_finish);   // refused while held: not counted
+		std::this_thread::sleep_for(100ms);
+		CHECK(slurp(path).find("REFUSED_SLOW_MARKER") == std::string::npos);  // armed, not written early
+	}
+	// The same through an explicit clear() at completion (Xapiand's L_TIMED_VAR):
+	// fast work stays silent, slow work is written once and its swap stays cancelled.
+	{
+		auto fast = Logging::do_log(true, in_ms(200), true, LOG_WARNING, "CLEARED_FAST_MARKER");
+		fast.clear();
+		auto slow = Logging::do_log(true, in_ms(30), true, LOG_WARNING, "CLEARED_SLOW_MARKER");
+		slow.unlog(LOG_NOTICE, "CLEARED_SLOW_DONE_MARKER");
+		std::this_thread::sleep_for(100ms);
+		slow.clear();
+	}
+	CHECK(Logging::pending_count() == p_finish);   // refusals left the count exact
+
 	auto out = slurp(path);
 	CHECK(out.find("IMMEDIATE_MARKER") != std::string::npos);
 	CHECK(out.find("CANCELLED_MARKER") == std::string::npos);    // never fired
@@ -173,6 +225,21 @@ int main() {
 		prev = p;
 	}
 	CHECK(out.find("FILLER_MARKER") == std::string::npos);       // far-future, never fired
+	CHECK(out.find("AFTER_FINISH_MARKER") != std::string::npos); // refused at shutdown, written inline
+	CHECK(out.find("HORIZON_FAST_MARKER") == std::string::npos); // refused watchdog, fast work: silent
+	CHECK(count_occurrences(out, "HORIZON_SEVERE_MARKER") == 1); // refused severe: written once, now
+	CHECK(out.find("HORIZON_ROUTINE_MARKER") == std::string::npos); // refused routine deferred: lost
+	CHECK(out.find("AFTER_FINISH_ROUTINE_MARKER") != std::string::npos);
+	CHECK(count_occurrences(out, "AFTER_FINISH_SEVERE_MARKER") == 1);
+	CHECK(out.find("AFTER_FINISH_DEFERRED_MARKER") == std::string::npos);
+	CHECK(out.find("REFUSED_FAST_MARKER") == std::string::npos);
+	CHECK(out.find("REFUSED_FAST_DONE_MARKER") == std::string::npos);
+	CHECK(count_occurrences(out, "REFUSED_SLOW_MARKER") == 1);   // slow work: once, at completion
+	CHECK(out.find("REFUSED_SLOW_DONE_MARKER") != std::string::npos);
+	CHECK(out.find("REFUSED_SLOW_MARKER") < out.find("REFUSED_SLOW_DONE_MARKER"));
+	CHECK(out.find("CLEARED_FAST_MARKER") == std::string::npos);
+	CHECK(count_occurrences(out, "CLEARED_SLOW_MARKER") == 1);
+	CHECK(out.find("CLEARED_SLOW_DONE_MARKER") == std::string::npos);
 	CHECK(out.find("DROPME_MARKER") == std::string::npos);       // dropped under backpressure
 	CHECK(out.find("backpressure") != std::string::npos);        // drop summary emitted
 	CHECK(out.find('\033') == std::string::npos);                // colors off -> no ANSI

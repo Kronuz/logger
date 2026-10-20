@@ -186,6 +186,10 @@ class Logging : public ScheduledTask<Scheduler<Logging, ThreadPolicyType::loggin
 	std::source_location loc;   // call site (file / line / function), C++20
 	int indent;         // stacked-indent depth, captured at creation (thread-local)
 	bool scheduled;     // was put on the wheel (so ~Logging decrements `pending`)
+	// Set when the scheduler refused a future `clears` line: it stays armed off the
+	// wheel, and its cancel point (clean() or clear()) writes it only if this
+	// deadline has passed, i.e. the work was slow.
+	std::chrono::steady_clock::time_point refused_deadline{};
 	std::chrono::system_clock::time_point timestamp;
 	std::atomic<std::chrono::steady_clock::time_point> atom_cleaned_at;
 
@@ -233,6 +237,9 @@ public:
 	// Lines dropped under backpressure so far (observability / tests).
 	static long dropped_count() { return dropped.load(std::memory_order_relaxed); }
 
+	// Lines on the wheel now (observability / tests).
+	static long pending_count() { return pending.load(std::memory_order_relaxed); }
+
 	// iTerm2 terminal integration. Each emits an iTerm2 proprietary escape code,
 	// and is a safe no-op unless stderr is an iTerm2 terminal (auto-detected via
 	// TERM_PROGRAM / LC_TERMINAL) and config.iterm2 is set. Callable from anywhere.
@@ -247,6 +254,7 @@ public:
 	void vunlog(int priority, std::string&& str);
 	void clean();
 	bool clear(bool internal = false);
+	bool refused_late() const;   // refused by the scheduler and past its deadline
 	std::chrono::nanoseconds age();
 
 	void operator()();

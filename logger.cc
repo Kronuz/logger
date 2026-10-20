@@ -582,7 +582,23 @@ Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bo
 		// LOG thread fires operator() and writes them.
 		entry->scheduled = true;
 		pending.fetch_add(1, std::memory_order_relaxed);
-		scheduler().add(entry, wakeup);
+		if (!scheduler().add(entry, wakeup)) {
+			// Refused (shutting down, or past the 24 h horizon); undo the count.
+			entry->scheduled = false;
+			pending.fetch_sub(1, std::memory_order_relaxed);
+			bool due = wakeup <= std::chrono::steady_clock::now();
+			if (clears && !due) {
+				// A slow-work watchdog: never written now (that would log every fast
+				// operation); its cancel point writes it only if the work was slow.
+				entry->refused_deadline = wakeup;
+			} else if (due || priority < LOG_NOTICE) {
+				// Async with no delay, or severe (what backpressure never drops):
+				// write it now, synchronously.
+				entry->Base::clear(true);   // fired: a later clean() keeps its swap
+				(*entry)();
+			}
+			// Else a routine deferred line that does not clear: lost, as before.
+		}
 	} else {
 		// immediate logs run inline on the calling thread.
 		(*entry)();
@@ -682,8 +698,15 @@ Logging::clean()
 		// If we cancel the scheduled line before it fired, stay silent: drop the
 		// swap message too. If it already fired, clear(true) loses the one-shot
 		// CAS and the swap below still runs.
-		if (clear(true)) {
-			unlog_str.clear();
+		auto late = refused_late();
+		if (Base::clear(true)) {
+			if (late) {
+				// Refused by the scheduler, and the work outlasted the delay: write
+				// it now, as the wheel would have, and keep the swap.
+				(*this)();
+			} else {
+				unlog_str.clear();
+			}
 		}
 	}
 
@@ -705,7 +728,24 @@ Logging::clear(bool internal)
 	if (!internal) {
 		unlog_str.clear();
 	}
-	return Base::clear(internal);
+	auto late = refused_late();
+	if (!Base::clear(internal)) {
+		return false;
+	}
+	if (late) {
+		// A refused watchdog cancelled after its deadline: the wheel would have
+		// written it by now, so write it (its swap stays cancelled).
+		(*this)();
+	}
+	return true;
+}
+
+
+bool
+Logging::refused_late() const
+{
+	return refused_deadline != std::chrono::steady_clock::time_point{} &&
+	       std::chrono::steady_clock::now() >= refused_deadline;
 }
 
 

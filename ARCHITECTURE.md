@@ -53,6 +53,27 @@ The thing to notice: paths 2 and 3 both go through the same stash-backed
 scheduler. **There is no separate queue for "regular" logs.** The wheel is the one
 channel from the many producer threads to the single consumer.
 
+If the scheduler refuses a line (its `add` returns false: after `finish()` began,
+or a delay past the wheel's 24 h horizon), `Logging::add` first undoes `scheduled`
+and the `pending` increment, so the backpressure count stays exact, then acts by
+kind:
+
+- **Already due** (an async line with no delay): the calling thread writes it
+  inline, as path 1 would, since it would have been written anyway.
+- **Severe** (priority above `NOTICE`, what backpressure never drops) and not a
+  watchdog: written inline now, even if it was deferred.
+- **A future watchdog** (`clears`, the slow-operation line): it stays armed off the
+  wheel. At its cancel point, when the handle is dropped or `clear()`ed as the
+  work completes, it is written (late) only if its deadline has passed, exactly
+  when the wheel would already have written it, so only slow work shows;
+  otherwise it is discarded like any cancelled watchdog. Its swap follows the same
+  rules as on the wheel: kept on a handle drop, cancelled by `clear()`.
+  A watchdog keeps this rule whatever its priority: writing it early would log
+  every fast operation.
+- **A routine future line that does not clear** (`L_DELAYED(false, ...)` or
+  `do_log` with `clears == false`, `NOTICE` or below): it has no cancel point to
+  decide at, so it is lost as before. Neither Xapiand nor Detent emits one.
+
 ## There is no logging thread separate from the scheduler
 
 It is tempting to picture a logging thread on one side, the scheduler on the
