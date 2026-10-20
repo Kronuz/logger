@@ -582,8 +582,9 @@ Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bo
 		// LOG thread fires operator() and writes them.
 		entry->scheduled = true;
 		pending.fetch_add(1, std::memory_order_relaxed);
-		if (!scheduler().add(entry, wakeup)) {
-			// Refused (shutting down, or past the 24 h horizon); undo the count.
+		if (scheduler().add(entry, wakeup) != schedule_result::scheduled) {
+			// Refused (stopping, past the 24 h horizon, or no memory); undo the
+			// count. The policy goes by the line's kind, not the reason.
 			entry->scheduled = false;
 			pending.fetch_sub(1, std::memory_order_relaxed);
 			bool due = wakeup <= std::chrono::steady_clock::now();
