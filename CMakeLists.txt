@@ -13,7 +13,7 @@ include(FetchContent)
 FetchContent_Declare(
   scheduler
   GIT_REPOSITORY https://github.com/Kronuz/scheduler.git
-  GIT_TAG        5319dc5f58465e5999ad978230205532ab652aaf
+  GIT_TAG        2cbea95b0bbfee638b73f36ae11ab4e4fb6f4cd5
 )
 FetchContent_MakeAvailable(scheduler)
 
