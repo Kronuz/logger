@@ -2,7 +2,7 @@
 
 ## State
 
-Ready for review; not merged. Depends on Kronuz/scheduler `perf/lazy-rearm` (b36a99c), whose
+Ready for review; not merged. Depends on Kronuz/scheduler `perf/lazy-rearm` (5319dc5), whose
 `add` returns a `schedule_result`, and through it on stash `perf/window-epoch`.
 
 ## Done
@@ -20,7 +20,7 @@ Ready for review; not merged. Depends on Kronuz/scheduler `perf/lazy-rearm` (b36
   are written at once; refused async lines, routine or not, are written; a refused routine
   deferred line is lost; `pending_count()` is exact across every refusal (0 before anything is
   scheduled).
-- scheduler pinned to b36a99c (`schedule_result`); the policy goes by the line's kind, so every
+- scheduler pinned to 5319dc5 (`schedule_result`); the policy goes by the line's kind, so every
   refusal reason takes the same path.
 
 ## Next
