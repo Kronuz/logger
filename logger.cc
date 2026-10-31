@@ -635,12 +635,17 @@ Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bo
 {
 	bool will_schedule = async || wakeup > now;
 
-	// An async line due now rides the wheel kCoalesce later: the LOG thread then
-	// sleeps to that time, and the lines queued meanwhile are due later than its
-	// wake time, so they need no signal. Every such line shifts alike, so their
-	// order is unchanged; deferred lines keep their time.
+	// A line on the wheel due within kCoalesce of now rides the wheel at now + kCoalesce:
+	// the LOG thread then sleeps to that time, and the lines queued meanwhile are due
+	// later than its wake time, so they need no signal. The shift is max(wakeup, now +
+	// kCoalesce) for every scheduled line, `clears` ones included, which is non-decreasing
+	// in both the due time and the call time: of two lines due in the order they were
+	// logged, the first never lands in a later tick than the second, and the wheel keeps
+	// insertion order within a tick. (Shifting only some kinds of line would let a line
+	// due 0.3 ms ahead overtake an immediate line logged before it.) A line is written up
+	// to kCoalesce after the call; finish() drains the wheel, so it is not lost there.
 	const auto due_at = wakeup;
-	if (async && !clears && wakeup < now + kCoalesce) {
+	if (will_schedule && wakeup < now + kCoalesce) {
 		wakeup = now + kCoalesce;
 	}
 
@@ -672,7 +677,7 @@ Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bo
 			if (clears && !due) {
 				// A slow-work watchdog: never written now (that would log every fast
 				// operation); its cancel point writes it only if the work was slow.
-				entry->refused_deadline = wakeup;
+				entry->refused_deadline = due_at;
 			} else if (due || priority < LOG_NOTICE) {
 				// Async with no delay, or severe (what backpressure never drops):
 				// write it now, synchronously.

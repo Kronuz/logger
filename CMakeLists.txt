@@ -64,6 +64,11 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(logger_timestamp_test PRIVATE logger)
   add_test(NAME logger_timestamp COMMAND logger_timestamp_test)
 
+  # Ordering of lines due within, and across, the wheel's 1 ms tick.
+  add_executable(logger_order_test test/order.cc)
+  target_link_libraries(logger_order_test PRIVATE logger)
+  add_test(NAME logger_order COMMAND logger_order_test)
+
   add_executable(logger_demo examples/demo.cc)
   target_link_libraries(logger_demo PRIVATE logger)
 endif()

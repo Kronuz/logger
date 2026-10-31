@@ -129,7 +129,10 @@ they do not serialize behind a log mutex; the insert is lock-free, so a burst of
 logging from many threads stays a burst of independent cheap inserts, and no
 thread's tail latency spikes because another thread is mid-log. The second is
 **one consumer, ordered output**: a single drain thread emits lines in slot order
-with no write lock and no interleaving.
+with no write lock and no interleaving. A line due within 1 ms of the call is moved to
+call time + 1 ms, whatever its kind: `max(due, now + 1 ms)` is non-decreasing in both the due
+time and the call time, so the first of two lines due in logging order never lands in a
+later tick, and the wheel keeps insertion order within a tick (`test/order.cc`).
 
 There is an honest wrinkle worth stating. The routine "now" logs all land near the
 current instant, which is the convergent-key pattern, the one the wheel is

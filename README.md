@@ -87,7 +87,9 @@ dedup, stacked indentation, and the iTerm2 integration.
 
 On Apple silicon, one producer thread pays about 235 ns per `L_INFO` with the LOG thread idle (310 ns before), and a line goes from call to written in about 460 ns (670 before); four producers pay about 360 ns each (610 before). Three things make that cheap:
 
-- A routine async line is scheduled 1 ms (the wheel's resolution) after the call. The LOG thread sleeps until then, and the lines queued meanwhile are due later than its wake time, so the producers send it no signal. The scheduler also skips the signal while its thread is awake.
+- A line due within 1 ms (the wheel's resolution) of the call, routine, deferred or `clears`, is scheduled 1 ms after the call. The LOG thread sleeps until then, and the lines queued meanwhile are due later than its wake time, so the producers send it no signal. The scheduler also skips the signal while its thread is awake.
+
+**Ordering and the 1 ms delay.** A line is written up to 1 ms after the call, and `Logging::finish()` drains the wheel, so a line logged just before `finish()` is written. A hard crash within that millisecond loses the line (it used to lose it within the signal latency). Order: of two lines due in the order they were logged, the first is never written after the second, and lines in one 1 ms tick come out in the order they were logged. (Before this fix the shift skipped `clears` lines, so a `clears` line due 0.3 ms out could overtake an immediate line logged before it.)
 - The timestamp's broken-down local time is cached per thread per whole second and rebuilt when the second or the `TZ` value changes; the digits are written as integers, with `snprintf` kept only for years outside 0..9999 and pre-epoch times.
 - A call reads the steady clock once and the system clock once.
 
