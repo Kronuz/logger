@@ -175,7 +175,11 @@ static void differential() {
 		}
 	}
 	Logging::config.timestamp = LogTimestamp::epoch;
-	for (long long sec : {-1LL, 9999999999LL, 10000000000LL}) {
+	std::vector<long long> epoch_secs{-1LL, 9000000000LL};
+	if (std::chrono::system_clock::period::den <= 1000000) {
+		epoch_secs.insert(epoch_secs.end(), {9999999999LL, 10000000000LL});
+	}
+	for (long long sec : epoch_secs) {
 		compare(std::chrono::system_clock::time_point(std::chrono::seconds(sec)));
 	}
 	set_tz(nullptr);
