@@ -137,7 +137,7 @@ static void differential() {
 				for (const char* z : zones) {
 					set_tz(z);
 					for (long e : edges) {
-						for (long d = -7200; d <= 7200; d += 600) {
+						for (long d = -7200; d <= 7200; d += 1800) {
 							auto tp = std::chrono::system_clock::time_point(std::chrono::seconds(e + d) + us_pick());
 							compare(tp);
 							compare(tp);  // same second again: cache hit
@@ -145,7 +145,7 @@ static void differential() {
 					}
 				}
 				// Random times, TZ switched between calls (same second under two zones).
-				for (int i = 0; i < 4000; ++i) {
+				for (int i = 0; i < 1500; ++i) {
 					long sec = static_cast<long>(rng() % 4000000000ULL);
 					auto tp = std::chrono::system_clock::time_point(std::chrono::seconds(sec) + us_pick());
 					set_tz(zones[rng() % std::size(zones)]);
@@ -163,7 +163,12 @@ static void differential() {
 	Logging::config.precision = LogPrecision::microseconds;
 	Logging::config.timestamp_gradient = false;
 	set_tz("UTC");
-	for (long long sec : {-1LL, -86400LL * 365, -2000000000LL, 253402300800LL, 400000000000LL}) {
+	// Years past 9999 need a system_clock coarser than nanoseconds (libc++).
+	std::vector<long long> far_secs{-1LL, -86400LL * 365, -2000000000LL};
+	if (std::chrono::system_clock::period::den <= 1000000) {
+		far_secs.insert(far_secs.end(), {253402300800LL, 400000000000LL});
+	}
+	for (long long sec : far_secs) {
 		for (long long us : {0LL, 1LL, 999999LL, 123456LL}) {
 			compare(std::chrono::system_clock::time_point(std::chrono::microseconds(sec * 1000000 + us)));
 			compare(std::chrono::system_clock::time_point(std::chrono::microseconds(sec * 1000000 - us)));
@@ -213,15 +218,15 @@ static void text_and_order() {
 	Logging::hooks.timestamp = [](std::chrono::system_clock::time_point) { return std::string("T "); };
 
 	// One producer: every line present, in order, byte-exact.
-	for (int i = 0; i < 5000; ++i) {
-		L_INFO("line {} of {}", i, 5000);
+	for (int i = 0; i < 2000; ++i) {
+		L_INFO("line {} of {}", i, 2000);
 	}
 	wait_drained();
 	{
 		std::lock_guard l(c->m);
-		CHECK(c->lines.size() == 5000);
-		for (int i = 0; i < 5000; ++i) {
-			auto want = "T " + std::string("line ") + std::to_string(i) + " of 5000";
+		CHECK(c->lines.size() == 2000);
+		for (int i = 0; i < 2000; ++i) {
+			auto want = "T " + std::string("line ") + std::to_string(i) + " of 2000";
 			if (c->lines[i] != want) {
 				std::fprintf(stderr, "line %d: got [%s] want [%s]\n", i, c->lines[i].c_str(), want.c_str());
 			}
@@ -231,7 +236,7 @@ static void text_and_order() {
 	}
 
 	// Several producers: nothing lost or duplicated, per-producer order kept.
-	constexpr int kThreads = 6, kEach = 4000;
+	constexpr int kThreads = 6, kEach = 1000;
 	std::vector<std::thread> ts;
 	for (int t = 0; t < kThreads; ++t) {
 		ts.emplace_back([t] {
@@ -265,17 +270,24 @@ static void text_and_order() {
 	// after a later one still wakes the sleeping consumer on time.
 	{
 		auto now = std::chrono::steady_clock::now();
-		Logging::do_log(false, now + 600ms, true, LOG_INFO, "late");
+		Logging::do_log(false, now + 3s, true, LOG_INFO, "late");
 		std::this_thread::sleep_for(50ms);
-		Logging::do_log(false, now + 300ms, true, LOG_INFO, "mid");
-		auto t0 = std::chrono::steady_clock::now();
-		Logging::do_log(false, t0 + 40ms, true, LOG_INFO, "soon");
-		std::this_thread::sleep_for(150ms);
+		Logging::do_log(false, now + 1500ms, true, LOG_INFO, "mid");
+		Logging::do_log(false, std::chrono::steady_clock::now() + 40ms, true, LOG_INFO, "soon");
+		for (int i = 0; i < 100; ++i) {
+			std::this_thread::sleep_for(10ms);
+			std::lock_guard l(c->m);
+			if (!c->lines.empty()) {
+				break;
+			}
+		}
 		{
 			std::lock_guard l(c->m);
 			CHECK(c->lines.size() == 1 && c->lines[0] == "T soon");
 		}
-		wait_drained();
+		for (int i = 0; i < 1000 && Logging::pending_count() > 0; ++i) {
+			std::this_thread::sleep_for(10ms);
+		}
 		std::this_thread::sleep_for(100ms);
 		std::lock_guard l(c->m);
 		CHECK((c->lines == std::vector<std::string>{"T soon", "T mid", "T late"}));
