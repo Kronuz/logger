@@ -290,8 +290,44 @@ render(int priority, std::string_view str, bool with_priority, bool with_endl, b
 // The returned string ends without a color reset; operator() appends one after the
 // whole info decoration (so a trailing thread/location inherits the dim tail color,
 // matching the original).
-static std::string
-default_timestamp(std::chrono::system_clock::time_point tp)
+// Appends v as exactly `width` zero-padded decimal digits (v < 10^width).
+static void
+put_digits(std::string& s, unsigned long v, int width)
+{
+	char b[20];
+	for (int i = width; i-- > 0; v /= 10) {
+		b[i] = static_cast<char>('0' + v % 10);
+	}
+	s.append(b, static_cast<size_t>(width));
+}
+
+// Broken-down local time for the whole second t, cached per thread. localtime_r
+// is paid once per second instead of per line; it is redone when the TZ value
+// changes (macOS re-reads TZ on every localtime_r call, so the cache is keyed on it).
+static const std::tm&
+local_tm(std::time_t t)
+{
+	struct Cache {
+		std::time_t sec = 0;
+		bool valid = false;
+		bool has_tz = false;
+		std::string tz;
+		std::tm tm{};
+	};
+	static thread_local Cache c;
+	const char* tz = std::getenv("TZ");
+	if (!c.valid || c.sec != t || (tz != nullptr) != c.has_tz || (tz != nullptr && c.tz != tz)) {
+		localtime_r(&t, &c.tm);
+		c.sec = t;
+		c.valid = true;
+		c.has_tz = tz != nullptr;
+		c.tz.assign(tz != nullptr ? tz : "");
+	}
+	return c.tm;
+}
+
+std::string
+logger_detail::default_timestamp(std::chrono::system_clock::time_point tp)
 {
 	using namespace std::chrono;
 	const auto& cfg = Logging::config;
@@ -307,26 +343,56 @@ default_timestamp(std::chrono::system_clock::time_point tp)
 
 	auto t = system_clock::to_time_t(tp);
 	long us = static_cast<long>(duration_cast<microseconds>(tp.time_since_epoch()).count() % 1000000);
-	std::tm tm{};
-	localtime_r(&t, &tm);
+	const std::tm& tm = local_tm(t);
+
+	// Field widths the integer path reproduces exactly; anything else (pre-epoch
+	// fractions, years outside 0..9999, epochs past 10 digits) takes snprintf.
+	const bool plain = us >= 0 && t >= 0 && t <= 9999999999L
+		&& tm.tm_year + 1900 >= 0 && tm.tm_year + 1900 <= 9999;
 
 	char b[32];
 	std::string s;
+	s.reserve(96);
+
+	auto d2 = [&](int v, const std::string& col) {
+		s += col;
+		put_digits(s, static_cast<unsigned long>(v), 2);
+	};
+	auto d4 = [&](const std::string& col) {
+		s += col;
+		if (plain) {
+			put_digits(s, static_cast<unsigned long>(tm.tm_year + 1900), 4);
+		} else {
+			std::snprintf(b, sizeof b, "%04d", tm.tm_year + 1900);
+			s += b;
+		}
+	};
+	auto num = [&](long v, int width, const char* fmt) {
+		if (plain) {
+			put_digits(s, static_cast<unsigned long>(v), width);
+		} else {
+			std::snprintf(b, sizeof b, fmt, v);
+			s += b;
+		}
+	};
 
 	// Dim, optional sub-second suffix (".mmm" / ".uuuuuu") per precision.
 	auto frac = [&]() {
 		if (cfg.precision == LogPrecision::microseconds) {
-			std::snprintf(b, sizeof b, "%06ld", us);
-			s += g(kGrey60); s += '.'; s += b;
+			s += g(kGrey60); s += '.'; num(us, 6, "%06ld");
 		} else if (cfg.precision == LogPrecision::milliseconds) {
-			std::snprintf(b, sizeof b, "%03ld", us / 1000);
-			s += g(kGrey60); s += '.'; s += b;
+			s += g(kGrey60); s += '.'; num(us / 1000, 3, "%03ld");
 		}
 	};
 
 	if (cfg.timestamp == LogTimestamp::epoch) {
-		std::snprintf(b, sizeof b, "%010ld", static_cast<long>(t));
-		s += g(kGrey94); s += b;
+		s += g(kGrey94);
+		if (plain) {
+			put_digits(s, static_cast<unsigned long>(t), 10);
+		} else {
+			std::snprintf(b, sizeof b, "%010ld", static_cast<long>(t));
+			s += b;
+		}
 		frac();
 		s += ' ';
 		return s;
@@ -334,29 +400,29 @@ default_timestamp(std::chrono::system_clock::time_point tp)
 
 	if (cfg.timestamp == LogTimestamp::iso8601) {
 		// Bright digits (94), dim separators (60).
-		std::snprintf(b, sizeof b, "%04d", tm.tm_year + 1900); s += g(kGrey94); s += b;
+		d4(g(kGrey94));
 		s += g(kGrey60); s += '-';
-		std::snprintf(b, sizeof b, "%02d", tm.tm_mon + 1);     s += g(kGrey94); s += b;
+		d2(tm.tm_mon + 1, g(kGrey94));
 		s += g(kGrey60); s += '-';
-		std::snprintf(b, sizeof b, "%02d", tm.tm_mday);        s += g(kGrey94); s += b;
+		d2(tm.tm_mday, g(kGrey94));
 		s += g(kGrey60); s += ' ';
-		std::snprintf(b, sizeof b, "%02d", tm.tm_hour);        s += g(kGrey94); s += b;
+		d2(tm.tm_hour, g(kGrey94));
 		s += g(kGrey60); s += ':';
-		std::snprintf(b, sizeof b, "%02d", tm.tm_min);         s += g(kGrey94); s += b;
+		d2(tm.tm_min, g(kGrey94));
 		s += g(kGrey60); s += ':';
-		std::snprintf(b, sizeof b, "%02d", tm.tm_sec);         s += g(kGrey94); s += b;
+		d2(tm.tm_sec, g(kGrey94));
 		frac();
 		s += ' ';
 		return s;
 	}
 
 	// LogTimestamp::datetime -- compact YYYYMMDDHHMMSS, brightness ramps to the hour.
-	std::snprintf(b, sizeof b, "%04d", tm.tm_year + 1900); s += g(kGrey60);  s += b;
-	std::snprintf(b, sizeof b, "%02d", tm.tm_mon + 1);     s += g(kGrey94);  s += b;
-	std::snprintf(b, sizeof b, "%02d", tm.tm_mday);        s += g(kGrey162); s += b;
-	std::snprintf(b, sizeof b, "%02d", tm.tm_hour);        s += g(kGrey230); s += b;
-	std::snprintf(b, sizeof b, "%02d", tm.tm_min);         s += g(kGrey162); s += b;
-	std::snprintf(b, sizeof b, "%02d", tm.tm_sec);         s += g(kGrey94);  s += b;
+	d4(g(kGrey60));
+	d2(tm.tm_mon + 1, g(kGrey94));
+	d2(tm.tm_mday,    g(kGrey162));
+	d2(tm.tm_hour,    g(kGrey230));
+	d2(tm.tm_min,     g(kGrey162));
+	d2(tm.tm_sec,     g(kGrey94));
 	frac();
 	s += ' ';
 	return s;
@@ -386,7 +452,7 @@ default_describe_exception(std::exception_ptr e)
 }
 
 static std::string hooked_timestamp(std::chrono::system_clock::time_point tp) {
-	return Logging::hooks.timestamp ? Logging::hooks.timestamp(tp) : default_timestamp(tp);
+	return Logging::hooks.timestamp ? Logging::hooks.timestamp(tp) : logger_detail::default_timestamp(tp);
 }
 static std::string hooked_thread_name(std::thread::id id) {
 	return Logging::hooks.thread_name ? Logging::hooks.thread_name(id) : default_thread_name(id);
@@ -463,6 +529,8 @@ SysLog::log(int priority, std::string_view str, bool with_priority, bool /*with_
 
 
 // --- Logging -------------------------------------------------------------
+
+static constexpr std::chrono::nanoseconds kCoalesce = 1ms;   // the wheel's resolution
 
 Logging::Logging(std::string&& str_, bool clears_, bool async_, bool info_, uint64_t once_, int priority_,
 		std::exception_ptr eptr_, std::source_location loc_,
@@ -541,7 +609,9 @@ Logging::do_log(bool clears, std::chrono::steady_clock::time_point wakeup, bool 
 		std::string&& str)
 {
 	if (priority <= config.log_level) {
-		return add(wakeup, std::move(str), clears, async, info, once, priority, std::move(eptr), loc);
+		auto now = std::chrono::steady_clock::now();
+		return add(wakeup, std::move(str), clears, async, info, once, priority, std::move(eptr), loc,
+			now, std::chrono::system_clock::now(), now);
 	}
 	return Log();
 }
@@ -560,9 +630,19 @@ Log
 Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bool clears, bool async, bool info,
 		uint64_t once, int priority, std::exception_ptr eptr, std::source_location loc,
 		std::chrono::steady_clock::time_point created_at,
-		std::chrono::system_clock::time_point timestamp)
+		std::chrono::system_clock::time_point timestamp,
+		std::chrono::steady_clock::time_point now)
 {
-	bool will_schedule = async || wakeup > std::chrono::steady_clock::now();
+	bool will_schedule = async || wakeup > now;
+
+	// An async line due now rides the wheel kCoalesce later: the LOG thread then
+	// sleeps to that time, and the lines queued meanwhile are due later than its
+	// wake time, so they need no signal. Every such line shifts alike, so their
+	// order is unchanged; deferred lines keep their time.
+	const auto due_at = wakeup;
+	if (async && !clears && wakeup < now + kCoalesce) {
+		wakeup = now + kCoalesce;
+	}
 
 	// Backpressure: when the wheel is saturated, drop routine async lines (NOTICE
 	// and below severity, non-deferred) rather than grow without bound. Severe and
@@ -588,7 +668,7 @@ Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bo
 			// count. The policy goes by the line's kind, not the reason.
 			entry->scheduled = false;
 			pending.fetch_sub(1, std::memory_order_relaxed);
-			bool due = wakeup <= std::chrono::steady_clock::now();
+			bool due = due_at <= std::chrono::steady_clock::now();
 			if (clears && !due) {
 				// A slow-work watchdog: never written now (that would log every fast
 				// operation); its cancel point writes it only if the work was slow.
@@ -717,7 +797,7 @@ Logging::clean()
 	if (atom_cleaned_at.compare_exchange_strong(c, now)) {
 		if (!unlog_str.empty() && unlog_priority <= config.log_level) {
 			add(now, std::move(unlog_str), false, async, info, 0, unlog_priority,
-				std::exception_ptr{}, loc, atom_created_at.load(), timestamp);
+				std::exception_ptr{}, loc, atom_created_at.load(), timestamp, now);
 			unlog_str.clear();
 		}
 	}

@@ -158,6 +158,11 @@ public:
 };
 
 
+namespace logger_detail {
+// The built-in timestamp formatter, exposed for tests; not part of the API.
+std::string default_timestamp(std::chrono::system_clock::time_point tp);
+}
+
 class Log;
 class Logging;
 using LogType = std::shared_ptr<Logging>;
@@ -203,8 +208,9 @@ class Logging : public ScheduledTask<Scheduler<Logging, ThreadPolicyType::loggin
 
 	static Log add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bool clears, bool async, bool info,
 		uint64_t once, int priority, std::exception_ptr eptr, std::source_location loc,
-		std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now(),
-		std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::now());
+		std::chrono::steady_clock::time_point created_at,
+		std::chrono::system_clock::time_point timestamp,
+		std::chrono::steady_clock::time_point now);
 
 public:
 	static LogConfig config;

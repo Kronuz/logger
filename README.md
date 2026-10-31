@@ -83,6 +83,16 @@ dedup, stacked indentation, and the iTerm2 integration.
   text lines.
 - ❌ A single-threaded tool: plain `std::fprintf(stderr, …)` is simpler.
 
+## ⚡ Performance
+
+On Apple silicon, one producer thread pays about 235 ns per `L_INFO` with the LOG thread idle (310 ns before), and a line goes from call to written in about 460 ns (670 before); four producers pay about 360 ns each (610 before). Three things make that cheap:
+
+- A routine async line is scheduled 1 ms (the wheel's resolution) after the call. The LOG thread sleeps until then, and the lines queued meanwhile are due later than its wake time, so the producers send it no signal. The scheduler also skips the signal while its thread is awake.
+- The timestamp's broken-down local time is cached per thread per whole second and rebuilt when the second or the `TZ` value changes; the digits are written as integers, with `snprintf` kept only for years outside 0..9999 and pre-epoch times.
+- A call reads the steady clock once and the system clock once.
+
+`bench/lg.cc` (`-DLOGGER_BUILD_BENCH=ON`) measures the producer cost against a synchronous fmt-and-mutex sink.
+
 ## 📚 Documentation
 
 - [docs/API.md](docs/API.md): `LogConfig`, `LogHooks`, sinks, the macros, and the

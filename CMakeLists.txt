@@ -13,7 +13,7 @@ include(FetchContent)
 FetchContent_Declare(
   scheduler
   GIT_REPOSITORY https://github.com/Kronuz/scheduler.git
-  GIT_TAG        2cbea95b0bbfee638b73f36ae11ab4e4fb6f4cd5
+  GIT_TAG        02a72eafb7a419f45b09a67c8578a7734de09592
 )
 FetchContent_MakeAvailable(scheduler)
 
@@ -60,6 +60,21 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_test(NAME logger_tint COMMAND logger_tint_test)
   add_test(NAME logger_tint_off COMMAND logger_tint_test off)
 
+  add_executable(logger_timestamp_test test/timestamp.cc)
+  target_link_libraries(logger_timestamp_test PRIVATE logger)
+  add_test(NAME logger_timestamp COMMAND logger_timestamp_test)
+
   add_executable(logger_demo examples/demo.cc)
   target_link_libraries(logger_demo PRIVATE logger)
+endif()
+
+# Producer-cost benchmark (opt-in): fetches fmt for the synchronous comparator only.
+option(LOGGER_BUILD_BENCH "Build bench/lg.cc" OFF)
+if(LOGGER_BUILD_BENCH AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  FetchContent_Declare(fmt
+    GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+    GIT_TAG        10.2.1)
+  FetchContent_MakeAvailable(fmt)
+  add_executable(logger_bench bench/lg.cc)
+  target_link_libraries(logger_bench PRIVATE logger fmt::fmt)
 endif()
