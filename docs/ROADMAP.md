@@ -1,9 +1,7 @@
 # logger roadmap
 
-Open design work, most important first. Done items live in the git history:
-bounded backpressure (`LogConfig::max_pending`), the bounded two-set `once` filter,
-the `thread_local` stacked indent, and hooks for exceptions, backtraces, thread
-names, and timestamps.
+Open design work, most important first. Shipped items are in
+[CHANGELOG.md](../CHANGELOG.md).
 
 ## One slow sink stalls all logging
 

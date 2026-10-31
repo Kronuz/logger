@@ -580,8 +580,7 @@ Logging::finish(int wait)
 {
 	bool ok = scheduler().finish(wait);
 	// Restore the terminal at shutdown: clear the iTerm2 badge / tab tint and pop
-	// the saved title. (A no-op unless iTerm2 customizations were applied.) This was
-	// part of the original logger's finish() and must not be lost on extraction.
+	// the saved title. (A no-op unless iTerm2 customizations were applied.)
 	reset_iterm2();
 	return ok;
 }

@@ -55,8 +55,8 @@ cmake --build build-tsan && ./build-tsan/logger_test
   via hooks.
 - Keep `Xapian::Error` and real backtraces out of the core; they reach it through
   `LogHooks` (a consumer-side adapter, as Xapiand's). The iTerm2 integration
-  (marks / tab tint / badge / notifications, gated by `config.iterm2`) does ship in
-  the core: the extraction's open question was resolved in its favor.
+  (marks / tab tint / badge / notifications, gated by `config.iterm2`) ships in
+  the core.
 
 ## Load-bearing invariants
 

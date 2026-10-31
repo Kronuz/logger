@@ -72,7 +72,7 @@ kind:
   every fast operation.
 - **A routine future line that does not clear** (`L_DELAYED(false, ...)` or
   `do_log` with `clears == false`, `NOTICE` or below): it has no cancel point to
-  decide at, so it is lost as before. Neither Xapiand nor Detent emits one.
+  decide at, so it is lost. Neither Xapiand nor Detent emits one.
 
 ## There is no logging thread separate from the scheduler
 
