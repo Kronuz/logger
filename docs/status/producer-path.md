@@ -1,8 +1,7 @@
 # Status: perf/logger-producer
 
-Workstream: logger producer path. Branch `perf/logger-producer` (worktree
-`libs/logger-wt/producer`, base `main` 5299eb3), with `perf/scheduler-producer` in the scheduler
-(worktree `libs/scheduler-wt/producer`, base `main` 5fa44d1). Brief: `campaign/DEV_BRIEF.md`.
+Workstream: logger producer path. Branch `perf/logger-producer` (base `main` 5299eb3), with `perf/scheduler-producer` in the scheduler
+(base `main` 5fa44d1); both are merged into `main`.
 
 ## Done criteria
 
@@ -53,7 +52,7 @@ its own.
   TSan: the frozen library's relaxed counters race with the test's configuration writes by
   construction). On the Linux VM (clang 12, `setarch -R`): logger order, format, producer and
   timestamp under TSan with no report; UBSan and the plain build on the M1 Pro.
-- Independent architect review (`campaign/reviews/logger-producer-handoff.md`): APPROVE WITH
+- Independent architect review (`docs/reviews/2026-10-31-logger-producer-handoff.md` in cpp-libraries): APPROVE WITH
   CONDITIONS; LPH-R1 to R7 folded in (close on every exit, no task code under the mutex,
   `pending_count()` read order, seq_cst wakeup load, bad_alloc in the arrival queue, a test for
   each, the cross-poster ordering contract documented and tested), then a re-check: R1 to R6
