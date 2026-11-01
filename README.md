@@ -87,14 +87,15 @@ dedup, stacked indentation, and the iTerm2 integration.
 
 A producer pays for the call, not for the line's trip to the sink. `bench/lg.cc` times one
 `L_INFO("value {} and {}", i, "x")` on the producer thread against a synchronous fmt-and-mutex sink
-with no I/O (median of five runs under `quiet strict`, two runs each):
+with no I/O (Apple clang, Release; median of five runs under `quiet strict`, two runs each; with
+four producers, wall time over all their calls):
 
-| ns per call | Apple M4 Pro (arm64) |
-|---|---|
-| 1 producer, LOG thread idle | 62 to 64 |
-| 1 producer, LOG thread draining | 59 to 62 |
-| 4 producers, LOG thread draining | 150 to 154 |
-| fmt-and-mutex sink, 1 producer / 4 producers | 25 to 26 / 86 to 90 |
+| ns per call | Apple M4 Pro (arm64) | Intel i9-9980HK (x86_64) |
+|---|---|---|
+| 1 producer, LOG thread idle | 65 to 66 | 387 to 402 |
+| 1 producer, LOG thread draining | 55 to 69 | 223 to 228 |
+| 4 producers, LOG thread draining | 158 to 172 | 81 to 85 |
+| fmt-and-mutex sink, 1 producer / 4 producers | 25 to 26 / 85 to 91 | 58 to 59 / 165 to 177 |
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DLOGGER_BUILD_BENCH=ON
