@@ -7,9 +7,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- The scheduler pin moves to f27febe: the worker walks at once when a pass finds a line due
-  (no mutex, no `sleeping` for producers to signal), `add()` fences before it reads the published
-  wakeup time, and stash's leaf inserts resume at the furthest node claimed. The LOG thread files a
+- The scheduler pin moves to 34631ec: the worker walks at once when a pass finds a line due
+  (no mutex, no `sleeping` for producers to signal), files the posted stack once per such pass,
+  leaves `ending` unwritten until `finish()`, `add()` fences before it reads the published wakeup
+  time, and stash's leaf inserts resume at the furthest node claimed. The LOG thread files a
   backlog of overdue lines in linear time instead of quadratic.
 - `cppcodec` is fetched at a commit (8019b8b, the one its `master` names) instead of at `master`.
 - The README states the producer cost measured on an Apple M4 Pro with `bench/lg.cc` (one producer:
