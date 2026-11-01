@@ -3,6 +3,19 @@
 All notable changes to `logger` are recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 2026-11-01
+
+### Tests
+
+- `test/order.cc` pins the two exceptions to the ordering guarantee that the README
+  states (audit L1). A line more severe than `LOG_ERR`, logged with `L_CRIT` while a
+  routine line due 300 ms out waits in the wheel, is written on the calling thread, ahead
+  of it, and the routine line is written by the LOG thread. After `finish()` has begun
+  (the LOG thread is stalled inside its first write so the drain is still running), a
+  line due at once is written on the calling thread, every line is written exactly once,
+  the LOG thread writes its lines in the order they were logged, and the 200 lines logged
+  before `finish()` are all drained. The capture records the writing thread of each line.
+
 ## 2026-10-31 (audit fixes)
 
 ### Changed

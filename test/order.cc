@@ -9,6 +9,11 @@
 // The coalescing shift (an async line due within 1 ms is queued 1 ms out) must keep this
 // for every kind of line, including `clears` lines, which wait for their handle to be
 // dropped to be cancelled.
+//
+// Two lines skip the LOG thread and are written on the calling thread, so they may come out
+// ahead of earlier routine lines (README, "Ordering and the 1 ms delay"): a line more severe
+// than LOG_ERR, and a line due at once that is logged after finish() has begun. The last two
+// sections check where those lines are written, and that finish() drains the rest, in order.
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -34,11 +39,14 @@ using namespace std::chrono_literals;
 struct Capture : Logger {
 	std::mutex m;
 	std::vector<std::string> lines;
+	std::vector<std::thread::id> by;   // the thread that wrote each line: the LOG thread, or a caller (inline)
 	std::atomic<int> stall_ms{0};   // the LOG thread sleeps this long in the next write (once)
+	void reset() { lines.clear(); by.clear(); }   // with `m` held
 	void log(int, std::string_view sv, bool, bool) override {
 		{
 			std::lock_guard l(m);
 			lines.emplace_back(sv);
+			by.push_back(std::this_thread::get_id());
 		}
 		if (int ms = stall_ms.exchange(0); ms != 0) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(ms));
@@ -140,27 +148,124 @@ int main() {
 				}
 			}
 		}
-		c->lines.clear();
+		c->reset();
 	}
 	std::printf("logger order OK: %ld ordered pairs held over %d rounds\n", pairs_checked, kRounds);
 
-	// A line logged just before finish() is written: the 1 ms coalescing does not lose it
-	// (finish() drains the wheel).
+	const auto me = std::this_thread::get_id();
+	auto wait_for_lines = [&](size_t n) {
+		for (int i = 0; i < 5000; ++i) {
+			{
+				std::lock_guard l(c->m);
+				if (c->lines.size() >= n) {
+					return;
+				}
+			}
+			std::this_thread::sleep_for(1ms);
+		}
+	};
+	auto position_of = [&](int index) {   // with `m` held
+		for (size_t k = 0; k < c->lines.size(); ++k) {
+			if (index_of(c->lines[k]) == index) {
+				return static_cast<long>(k);
+			}
+		}
+		return -1L;
+	};
+
+	// A line more severe than LOG_ERR skips the LOG thread: it is written at the call, on the calling
+	// thread, ahead of a routine line logged before it that is still waiting (README, "Ordering and the
+	// 1 ms delay"). The waiting line is due 300 ms out, so it rides the wheel.
 	{
+		{
+			std::lock_guard l(c->m);
+			c->reset();
+		}
+		const auto t0 = std::chrono::steady_clock::now();
+		Logging::do_log(false, t0 + 300ms, true, LOG_INFO, "#1");
+		L_CRIT("#2");
+		const auto waited = std::chrono::steady_clock::now() - t0;
+		{
+			std::lock_guard l(c->m);
+			const long severe = position_of(2);
+			CHECK(severe >= 0 && c->by[static_cast<size_t>(severe)] == me);   // written at the call
+			if (waited < 200ms) {
+				CHECK(c->lines.size() == 1);   // ahead of #1, which is not due yet
+			}
+		}
+		wait_for_lines(2);
 		std::lock_guard l(c->m);
-		c->lines.clear();
+		CHECK(c->lines.size() == 2);
+		const long routine = position_of(1);
+		CHECK(routine >= 0 && c->by[static_cast<size_t>(routine)] != me);   // the LOG thread wrote it
 	}
-	for (int i = 0; i < 200; ++i) {
-		Logging::do_log(false, std::chrono::steady_clock::now(), true, LOG_INFO, "#" + std::to_string(i));
-	}
-	Logging::finish();
+	std::printf("logger order OK: a severe line is written at the call, ahead of a waiting routine line\n");
+
+	// finish() drains the wheel, so lines logged just before it are written, in order, and the 1 ms
+	// coalescing does not lose them. A line due at once that is logged after finish() has begun is
+	// refused by the LOG thread and written at the call, ahead of the lines still draining. The first
+	// write stalls the LOG thread, so the drain is still running when the probes arrive; the probes
+	// find out that finish() has begun by the first one written on this thread.
 	{
+		{
+			std::lock_guard l(c->m);
+			c->reset();
+		}
+		constexpr int kBefore = 200;
+		c->stall_ms = 1000;
+		const auto stalled_at = std::chrono::steady_clock::now();
+		for (int i = 0; i < kBefore; ++i) {
+			Logging::do_log(false, std::chrono::steady_clock::now(), true, LOG_INFO, "#" + std::to_string(i));
+		}
+		wait_for_lines(1);   // the LOG thread is inside the stalled write
+		std::thread finisher([] { Logging::finish(); });
+		int probes = 0;
+		std::chrono::steady_clock::time_point found_at{};
+		for (; probes < 3000 && found_at == std::chrono::steady_clock::time_point{}; ++probes) {
+			L_INFO("#{}", 1000 + probes);
+			{
+				std::lock_guard l(c->m);
+				const long at = position_of(1000 + probes);
+				if (at >= 0 && c->by[static_cast<size_t>(at)] == me) {
+					found_at = std::chrono::steady_clock::now();
+				}
+			}
+			std::this_thread::sleep_for(200us);
+		}
+		CHECK(found_at != std::chrono::steady_clock::time_point{});   // finish() began and refused a probe
+		for (int extra = 0; extra < 20; ++extra, ++probes) {   // and it keeps refusing them
+			L_INFO("#{}", 1000 + probes);
+			std::lock_guard l(c->m);
+			const long at = position_of(1000 + probes);
+			CHECK(at >= 0 && c->by[static_cast<size_t>(at)] == me);
+		}
+		finisher.join();
+
 		std::lock_guard l(c->m);
-		CHECK(c->lines.size() == 200);
-		for (int i = 0; i < 200; ++i) {
-			CHECK(index_of(c->lines[i]) == i);
+		CHECK(c->lines.size() == static_cast<size_t>(kBefore + probes));
+		std::vector<int> seen(kBefore + probes, 0);
+		int last_from_log_thread = -1;
+		long first_inline = -1;
+		for (size_t k = 0; k < c->lines.size(); ++k) {
+			const int index = index_of(c->lines[k]);
+			const int slot = index < 1000 ? index : kBefore + (index - 1000);
+			CHECK(index >= 0 && slot < kBefore + probes && ++seen[slot] == 1);   // each line once
+			if (c->by[k] == me) {
+				if (first_inline < 0) {
+					first_inline = static_cast<long>(k);
+				}
+			} else {
+				CHECK(index > last_from_log_thread);   // the LOG thread keeps the logged order
+				last_from_log_thread = index;
+			}
+		}
+		for (int i = 0; i < kBefore; ++i) {
+			CHECK(seen[i] == 1);   // every line logged before finish() was drained
+		}
+		if (found_at - stalled_at < 800ms) {
+			CHECK(first_inline >= 0 && first_inline < position_of(kBefore - 1));   // ahead of the drain
 		}
 	}
-	std::printf("logger order OK: 200 lines logged immediately before finish() were all written, in order\n");
+	std::printf("logger order OK: finish() drained 200 lines in order, and refused later lines were written at the call\n");
 	return 0;
 }
