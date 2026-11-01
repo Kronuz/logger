@@ -3,6 +3,47 @@
 All notable changes to `logger` are recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 2026-10-31 (producer path)
+
+### Changed
+
+- One `L_INFO` costs a producer thread about 75 ns on an Apple M1 Pro (470 ns before) and about
+  225 ns on an Intel i9-9980HK (715 ns before); a synchronous fmt-and-mutex sink with no I/O costs
+  35 and 55 ns. Measured under `quiet strict` with `bench/steady.cc` (old and new alternated, three
+  runs each, twice: 469 to 477 against 73.5 to 77 ns on the M1 Pro, 714 to 717 against 224 to 225 ns on the
+  laptop) and `bench/lg.cc`. What changed:
+  - The record is handed to the LOG thread with one compare-exchange (the scheduler's `post()` and
+    `post_ordered()`); the LOG thread files it. The producer no longer does the wheel insert, whose
+    chain walk cost thousands of hops in a 1 ms slot holding a busy thread's lines. Lines due within
+    1 ms of their call wait in an arrival queue, ordered, and never enter the wheel.
+  - The macros format into a per-thread reusable buffer (`logger_detail::FormattedMsg`): plain `{}`
+    fields over integers, `bool`, `char` and strings are written directly, and everything else goes
+    through `std::vformat`. `test/format.cc` checks every message against `std::vformat`.
+  - The pending count is a striped producer counter and a consumer-owned completed counter, not one
+    atomic both sides write. `pending_count()` is their difference.
+  - A call reads the steady clock once and derives the wall-clock stamp from it (the offset between the
+    clocks is measured again every 20 ms); on macOS the steady read is `mach_continuous_time`, checked
+    against `steady_clock` at start-up. The thread's id and indent come from one thread-local block, and
+    the common path builds no `std::exception_ptr`.
+  - The scheduler pin moves to the commit with `post()`.
+- The wall-clock stamp is exact to the drift over 20 ms (within 2 us of `system_clock` at the default
+  microsecond precision), not to the nanosecond, and a step of the wall clock shows at the next
+  re-measurement.
+- A refusal while the LOG thread files a line (an allocation failure, or a wakeup under an hour out on a
+  wheel the LOG thread has not walked for most of a day) no longer reaches the poster: the LOG thread runs
+  the line if it is due and drops it otherwise. A line that races `finish()` is refused, or filed
+  and written if it is due; it is not left on a stack nobody drains.
+- Ordered posts are ordered per thread. Across threads a line may wait behind one due microseconds
+  later; the guarantee between lines whose logging is ordered is unchanged (`test/order.cc`).
+
+### Added
+
+- Tests: `test/format.cc`, `test/producer.cc` (exactly once from many threads, order across threads,
+  the counters, a `finish()` that races the producers), `test/clock.cc`, rounds in `test/order.cc` in
+  which the LOG thread is busy while lines are logged, and `test/transcript.cc` with `test/frozen/`, a
+  copy of the implementation before this change: one scripted run must write the same bytes through both.
+- Benchmarks: `bench/parts.cc`, `bench/steady.cc`, `bench/drain.cc` (with `-DLOGGER_BUILD_BENCH=ON`).
+
 ## 2026-10-31
 
 ### Changed

@@ -85,31 +85,46 @@ dedup, stacked indentation, and the iTerm2 integration.
 
 ## ⚡ Performance
 
-On Apple silicon, one producer thread pays about 235 ns per `L_INFO` with the LOG
-thread idle, and a line goes from call to written in about 460 ns; four producers
-pay about 360 ns each. `bench/lg.cc` measures the producer cost against a
-synchronous fmt-and-mutex sink:
+A producer pays for the call, not for the line's trip to the sink. One `L_INFO` costs a producer
+thread about 75 ns on an Apple M1 Pro and about 225 ns on an Intel i9-9980HK (470 and 715 ns
+before the producer path was reworked), against 35 and 55 ns for a synchronous fmt-and-mutex
+sink with no I/O. With four producers it is 85 to 130 ns on the M1 Pro. `bench/lg.cc` measures it
+against that comparator, `bench/steady.cc` is a profiling loop, and `bench/parts.cc` times each
+piece of a call alone:
 
 ```sh
 cmake -B build -DLOGGER_BUILD_BENCH=ON && cmake --build build && ./build/logger_bench
 ```
 
-Three things keep the cost low:
+What a call does, and what it leaves to the LOG thread:
 
-- A line due within 1 ms (the wheel's resolution) of the call, routine, deferred or
-  `clears`, is scheduled 1 ms after the call. The LOG thread sleeps until then, and
-  the lines queued meanwhile are due later than its wake time, so the producers
-  send it no signal. The scheduler also skips the signal while its thread is awake.
-- The timestamp's broken-down local time is cached per thread per whole second and
-  rebuilt when the second or the `TZ` value changes. The digits are written as
-  integers; `snprintf` handles only years outside 0..9999 and pre-epoch times.
-- A call reads the steady clock once and the system clock once.
+- The message is formatted into the thread's reusable buffer: plain `{}` fields over integers,
+  `bool`, `char` and strings are written straight into it, and anything else goes through
+  `std::vformat` into the thread's reusable string. Nothing is allocated for the text until the
+  line is copied into its record.
+- One steady-clock read stamps the line (on macOS, `mach_continuous_time`, checked against
+  `steady_clock` at start-up); the wall-clock stamp is derived from it with an offset measured again
+  every 20 ms. The thread's id and indent come from one thread-local block.
+- The record is pushed onto the scheduler's lock-free stack with one compare-exchange, and the LOG
+  thread, not the producer, files it. The LOG thread is signalled only when it sleeps past the line,
+  once per sleep. A line due within 1 ms (the wheel's resolution) of its call is due exactly 1 ms
+  after it, so those lines wait in an arrival queue in order and never enter the wheel.
+- The pending count is a striped counter the producers add to and a consumer-owned counter the LOG
+  thread adds to, so no cache line is written by both sides.
+- The timestamp's broken-down local time is cached per thread per whole second and rebuilt when the
+  second or the `TZ` value changes.
+
+What is left, on the Intel laptop, is two allocations per line (the record, about 55 ns, and the
+text, about 40 to 80 ns for a message past the short-string size), two clock reads (20 ns each) and the
+formatting itself; the M1 Pro's allocator and clock are three times cheaper.
 
 **Ordering and the 1 ms delay.** A line is written up to 1 ms after the call, and
 `Logging::finish()` drains the wheel, so a line logged just before `finish()` is
-written. A hard crash within that millisecond loses the line. Of two lines due in
-the order they were logged, the first is never written after the second, and lines
-in one 1 ms tick come out in the order they were logged.
+written. A hard crash within that millisecond loses the line. Of two lines whose logging is
+ordered (one thread's calls, or one thread's call finishing before another's begins) and that are
+due in that order, the first is never written after the second, and lines in one 1 ms tick come
+out in the order they were logged. Lines of unrelated threads can leave due order by the gap between
+a thread's clock read and its push (microseconds).
 
 ## 📚 Documentation
 

@@ -35,10 +35,11 @@ L_DELAYED(100ms, ...)       --> Logging task @ now+d --/                  (LOG t
    `print`. The point is a guarantee: if the process is about to die, the line is
    on its way to disk before the caller moves on.
 
-2. **Async, "now."** The calling thread renders the message to a string, wraps it
-   in a `Logging` task keyed at the current instant, and hands it to the
-   scheduler. The single LOG thread picks it up on its next pass and does the
-   decoration and the write. This is the path for `ERR` and everything less
+2. **Async, "now."** The calling thread renders the message into its own reusable
+   buffer, copies it into a `Logging` task keyed 1 ms after the call (the wheel's
+   tick), and posts the task to the scheduler. The single LOG thread files the task
+   into the wheel, and on its next pass does the decoration and the write. This is
+   the path for `ERR` and everything less
    severe (`WARNING`, `NOTICE`, `INFO`, `DEBUG`), set by `priority >= ASYNC_LOG_LEVEL`.
    The caller never touches the output fd, so a worker thread spewing logs never
    blocks on I/O or on a shared log lock.
@@ -118,6 +119,54 @@ Both arm and cancel are cheap and non-blocking, which is the whole reason this i
 affordable to do on every request. A heap-behind-a-mutex scheduler would put a
 lock on the hot path of every armed-and-cancelled log, and the cancel is the
 common case.
+
+## What one call costs
+
+A routine `L_INFO` does this on the calling thread and nothing else:
+
+1. Compare the priority with the level; below it, no argument is evaluated.
+2. Format into the thread's reusable buffer. `logger_detail::FormattedMsg` writes a format
+   string whose fields are all `{}` over integers, `bool`, `char` and strings straight into a
+   raw buffer (the bytes `std::vformat` writes), and hands anything else to `std::vformat_to` into
+   the thread's reusable string. Neither allocates once the buffer has grown.
+3. Read the steady clock once, and derive the wall-clock stamp from it: the offset between the
+   two clocks is measured again every 20 ms. (On macOS the steady read goes straight to
+   `mach_continuous_time`, after a check at start-up that it agrees with `steady_clock`.)
+4. Make the `Logging` record, one allocation, and copy the message into it. The thread's id
+   and indent come from one thread-local block.
+5. Post it: one compare-exchange onto the scheduler's lock-free stack, and a signal only if the
+   LOG thread sleeps past the line (once per sleep, however many lines arrive). A line due
+   within a tick of its call is due exactly 1 ms after it, so one thread's wakeup times never
+   decrease: it goes through `post_ordered`. Any other line (a deferred one) goes through `post`.
+   Two threads' lines can reach the stack in a different order from their clock reads (a thread
+   can be preempted between the two), so the queue may hold a line behind one due a little later,
+   by up to that gap; the order the log promises is the one between lines whose logging is itself
+   ordered, which holds (see `test/order.cc` and the scheduler's `test_ordered_posters`).
+6. Add one to the thread's stripe of the lines-posted counters. `pending_count()` is the sum of the
+   stripes less the LOG thread's own completed counter, so no cache line is written by both.
+7. Return the `Log` handle. Dropping it reads the steady clock for `cleaned_at` (the age of a line
+   is measured to it) and sets it once.
+
+The LOG thread takes the whole stack with one exchange, files the lines, and fires them. A
+`post_ordered` line goes into an arrival queue, not the wheel. A 1 ms wheel slot is a chain of
+10-entry chunks that an insert walks from the head, so a slot holding the thousands of "now"
+lines that one busy thread logs in a millisecond makes every insert cost thousands of hops: the
+old producer paid that on its own thread, and a first version of the hand-off that filed
+everything into the wheel moved the cost to the LOG thread, which then drained 50 000 lines at
+8 us each with a 21 ms stall. The arrival queue is merged with the wheel by tick and filing
+order (`BaseScheduler::fire_due` in the scheduler), which is the order the wheel alone would have
+given, so output order is unchanged. See the scheduler's ARCHITECTURE.md.
+
+What a call costs (`bench/steady.cc`, with each piece alone from `bench/parts.cc`). On an Apple M1
+Pro it is about 76 ns (470 before): two reads of `mach_continuous_time` at 5.6 ns, the record's
+`make_shared` at 21.5 ns, the compare-exchange that posts it at 6.5 ns, the stripe's `fetch_add` at 2 ns,
+and the formatting, the message copy, the `shared_ptr` traffic and the handle's drop for the rest. Before,
+six clock reads were about 100 ns, `std::vformat` into a fresh string 58 and the scheduler's `add()`
+about 310 (367 ns against 57 for `post()` in the scheduler's `bench/bench_post.cc`). On an Intel
+i9-9980HK it is about 225 ns (715 before), and the allocator and the clock are the difference: the record
+costs 56 ns, a 60-byte message string 84 ns (the short-string size is 22 bytes), a steady-clock read 20 ns,
+and two clocks, a record and the formatting with no queue at all add to 220 ns. Getting under 100 ns
+there takes a pool for the records and the message stored inside the record.
 
 ## Why stash, specifically
 
