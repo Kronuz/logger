@@ -85,16 +85,23 @@ dedup, stacked indentation, and the iTerm2 integration.
 
 ## ⚡ Performance
 
-A producer pays for the call, not for the line's trip to the sink. One `L_INFO` costs a producer
-thread about 75 ns on an Apple M1 Pro and about 225 ns on an Intel i9-9980HK (470 and 715 ns
-before the producer path was reworked), against 35 and 55 ns for a synchronous fmt-and-mutex
-sink with no I/O. With four producers it is 85 to 130 ns on the M1 Pro. `bench/lg.cc` measures it
-against that comparator, `bench/steady.cc` is a profiling loop, and `bench/parts.cc` times each
-piece of a call alone:
+A producer pays for the call, not for the line's trip to the sink. `bench/lg.cc` times one
+`L_INFO("value {} and {}", i, "x")` on the producer thread against a synchronous fmt-and-mutex sink
+with no I/O (median of five runs under `quiet strict`, two runs each):
+
+| ns per call | Apple M4 Pro (arm64) |
+|---|---|
+| 1 producer, LOG thread idle | 62 to 64 |
+| 1 producer, LOG thread draining | 59 to 62 |
+| 4 producers, LOG thread draining | 150 to 154 |
+| fmt-and-mutex sink, 1 producer / 4 producers | 25 to 26 / 86 to 90 |
 
 ```sh
-cmake -B build -DLOGGER_BUILD_BENCH=ON && cmake --build build && ./build/logger_bench
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DLOGGER_BUILD_BENCH=ON
+cmake --build build --target logger_bench && ./build/logger_bench
 ```
+
+`bench/steady.cc` is a profiling loop, and `bench/parts.cc` times each piece of a call alone.
 
 What a call does, and what it leaves to the LOG thread:
 
@@ -120,11 +127,14 @@ formatting itself; the M1 Pro's allocator and clock are three times cheaper.
 
 **Ordering and the 1 ms delay.** A line is written up to 1 ms after the call, and
 `Logging::finish()` drains the wheel, so a line logged just before `finish()` is
-written. A hard crash within that millisecond loses the line. Of two lines whose logging is
-ordered (one thread's calls, or one thread's call finishing before another's begins) and that are
-due in that order, the first is never written after the second, and lines in one 1 ms tick come
-out in the order they were logged. Lines of unrelated threads can leave due order by the gap between
-a thread's clock read and its push (microseconds).
+written. A hard crash within that millisecond loses the line. Of two lines that go through the LOG
+thread, whose logging is ordered (one thread's calls, or one thread's call finishing before
+another's begins) and that are due in that order, the first is never written after the second, and
+lines in one 1 ms tick come out in the order they were logged. Lines of unrelated threads can leave
+due order by the gap between a thread's clock read and its push (microseconds). Two kinds of line
+skip the LOG thread and are written at the call, so they can come out ahead of routine lines logged
+before them: lines more severe than `LOG_ERR` (`L_CRIT`, `L_ALERT`, `L_EMERG`), and lines due at once
+that are logged after `Logging::finish()` has begun, while it drains the earlier ones.
 
 ## 📚 Documentation
 

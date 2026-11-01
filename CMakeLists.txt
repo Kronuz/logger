@@ -13,15 +13,14 @@ include(FetchContent)
 FetchContent_Declare(
   scheduler
   GIT_REPOSITORY https://github.com/Kronuz/scheduler.git
-  GIT_TAG        2c7345f27e65b914dd5984e5ed26cd0c89b9da60
+  GIT_TAG        f27febe5983cff8b823405396c1df3d922d69e9b
 )
 FetchContent_MakeAvailable(scheduler)
 
 # term-color: the compile-time stacked color palette (rgb()/CLEAR_COLOR) plus the
 # runtime resolution layer (collapse / detect_depth / apply). The logger uses it for
 # the severity markers, the gradient timestamp, and to gate + collapse every line to
-# the terminal's depth (the NO_COLOR / --color policy). Tracks the term-color
-# default branch (tip).
+# the terminal's depth (the NO_COLOR / --color policy). Pinned by commit.
 FetchContent_Declare(
   term_color
   GIT_REPOSITORY https://github.com/Kronuz/term-color.git
@@ -32,10 +31,11 @@ FetchContent_MakeAvailable(term_color)
 # cppcodec: a dedicated base64 codec (base64_rfc4648), used only in logger.cc for the
 # iTerm2 badge escape. Header-only; SOURCE_SUBDIR points at a non-existent dir so its
 # CMakeLists (which requests an old CMake policy) is not run -- we only need headers.
+# Pinned to the commit its master names (2022-09-06; the last tag, v0.2, is from 2018).
 if(NOT DEFINED cppcodec_SOURCE_DIR)
   FetchContent_Declare(cppcodec
     GIT_REPOSITORY https://github.com/tplgy/cppcodec.git
-    GIT_TAG        master
+    GIT_TAG        8019b8b580f8573c33c50372baec7039dfe5a8ce
     SOURCE_SUBDIR  do-not-configure)
   FetchContent_MakeAvailable(cppcodec)
 endif()

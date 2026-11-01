@@ -3,6 +3,21 @@
 All notable changes to `logger` are recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 2026-10-31 (audit fixes)
+
+### Changed
+
+- The scheduler pin moves to f27febe: the worker walks at once when a pass finds a line due
+  (no mutex, no `sleeping` for producers to signal), `add()` fences before it reads the published
+  wakeup time, and stash's leaf inserts resume at the furthest node claimed. The LOG thread files a
+  backlog of overdue lines in linear time instead of quadratic.
+- `cppcodec` is fetched at a commit (8019b8b, the one its `master` names) instead of at `master`.
+- The README states the producer cost measured on an Apple M4 Pro with `bench/lg.cc` (one producer:
+  62 to 64 ns with the LOG thread idle, 59 to 62 ns while it drains; four producers: 150 to 154 ns),
+  and scopes the ordering guarantee to lines that go through the LOG thread: lines more severe than
+  `LOG_ERR`, and lines due at once that are logged after `finish()` begins, are written at the call
+  and can overtake queued ones (audit L1).
+
 ## 2026-10-31 (producer path)
 
 ### Changed
