@@ -118,18 +118,31 @@ Not for:
 
 ## ⚡ Performance
 
-A producer pays for the call, not for the line's trip to the sink. `bench/lg.cc`
-times one `L_INFO("value {} and {}", i, "x")` on the producer thread against a
-synchronous fmt-and-mutex sink with no I/O. ns per call, Apple clang, Release;
-each cell is the range over two runs, each the median of five; with four
-producers, wall time over all their calls:
+`bench/lg.cc` times what a producer thread pays for one `L_INFO("value {} and {}", i, "x")`,
+in nanoseconds per call; each cell is the range over two runs, each the median of five rounds.
+*LOG thread idle* times bursts of 1,000 calls on each producer while the LOG thread has nothing
+to write (it drains between bursts), so it is a producer's own time per call. *LOG thread
+draining* times calls back to back while the LOG thread stamps and writes them, as wall time
+divided by all calls, so with four producers it is their combined rate. Both format the message
+on the calling thread. The comparator, *fmt + mutex*, is a plain synchronous logger timed the
+same way as the draining column: the caller formats the same message with
+[fmt](https://github.com/fmtlib/fmt) 10.2.1 into a buffer and counts its bytes under a
+`std::mutex`, with no timestamp and no I/O. Both produce the same text (a check over the
+bench's 300,000 messages found no difference); the logger's sink also receives the timestamp.
 
-| ns per call | Apple M4 Pro (arm64) | Intel Core i9-9980HK (x86_64) |
-|---|---|---|
-| 1 producer, LOG thread idle | 65 to 66 | 387 to 402 |
-| 1 producer, LOG thread draining | 55 to 69 | 223 to 228 |
-| 4 producers, LOG thread draining | 158 to 172 | 81 to 85 |
-| fmt-and-mutex sink, 1 producer / 4 producers | 25 to 26 / 85 to 91 | 58 to 59 / 165 to 177 |
+| Producers, machine | `L_INFO`, LOG thread idle | `L_INFO`, LOG thread draining | fmt + mutex |
+|---|---:|---:|---:|
+| 1, Apple M4 Pro | 65 | 58 to 65 | 27 |
+| 4, Apple M4 Pro | 135 to 139 | 135 to 146 | 86 to 89 |
+| 1, Intel Core i9-9980HK | 398 to 401 | 228 to 229 | 60 to 61 |
+| 4, Intel Core i9-9980HK | 360 to 383 | 78 to 81 | 179 |
+
+A synchronous call is cheaper on one thread on both machines and on four threads on the M4
+Pro; on the i9 four producers sharing one mutex pay more than four handing lines to the LOG
+thread.
+
+Apple M4 Pro (arm64), macOS 26.7.2, and Intel Core i9-9980HK (x86_64), macOS 15.8.1, both
+with Apple clang 17.0.0 and `-O3 -DNDEBUG`, at `1f856e9`:
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DLOGGER_BUILD_BENCH=ON
@@ -137,9 +150,8 @@ cmake --build build --target logger_bench
 ./build/logger_bench
 ```
 
-[ARCHITECTURE.md](ARCHITECTURE.md#what-one-call-costs) breaks one call down into
-its pieces; `bench/parts.cc` times each piece alone, and `bench/steady.cc` is a
-profiling loop.
+[ARCHITECTURE.md](ARCHITECTURE.md#what-one-call-costs) breaks one call down into its pieces;
+`bench/parts.cc` times each piece alone, and `bench/steady.cc` is a profiling loop.
 
 ## 📚 Documentation
 
