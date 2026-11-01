@@ -13,7 +13,7 @@ include(FetchContent)
 FetchContent_Declare(
   scheduler
   GIT_REPOSITORY https://github.com/Kronuz/scheduler.git
-  GIT_TAG        36afadac005b094ed75f4124e11a3ab150bc96d6
+  GIT_TAG        2c7345f27e65b914dd5984e5ed26cd0c89b9da60
 )
 FetchContent_MakeAvailable(scheduler)
 
@@ -69,8 +69,43 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(logger_order_test PRIVATE logger)
   add_test(NAME logger_order COMMAND logger_order_test)
 
+  # The producer path's own clocks against the standard ones.
+  add_executable(logger_clock_test test/clock.cc)
+  target_link_libraries(logger_clock_test PRIVATE logger)
+  add_test(NAME logger_clock COMMAND logger_clock_test)
+
   add_executable(logger_demo examples/demo.cc)
   target_link_libraries(logger_demo PRIVATE logger)
+
+  # The macros' formatter against std::vformat, on random formats and arguments.
+  add_executable(logger_format_test test/format.cc)
+  target_link_libraries(logger_format_test PRIVATE logger)
+  add_test(NAME logger_format COMMAND logger_format_test)
+
+  # Many producers against the LOG thread: exactly-once, order across threads, counters, and
+  # a finish() that races the producers (each round is its own process).
+  add_executable(logger_producer_test test/producer.cc)
+  target_link_libraries(logger_producer_test PRIVATE logger)
+  add_test(NAME logger_producer COMMAND logger_producer_test)
+
+  # Differential test: one scripted run, built against the library and against the frozen copy
+  # of the implementation before the producer path changed (test/frozen), must write identical bytes.
+  # The frozen copy publishes `Logging::config` to the LOG thread with relaxed counters, so the
+  # test's own configuration writes race there by construction: ThreadSanitizer builds skip it
+  # (CI passes the flags through the per-config and linker variables).
+  string(TOUPPER "${CMAKE_BUILD_TYPE}" LOGGER_BUILD_TYPE)
+  set(LOGGER_ALL_FLAGS "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${LOGGER_BUILD_TYPE}} ${CMAKE_EXE_LINKER_FLAGS}")
+  if(NOT LOGGER_ALL_FLAGS MATCHES "-fsanitize=thread")
+    add_executable(logger_transcript_new test/transcript.cc)
+    target_link_libraries(logger_transcript_new PRIVATE logger)
+    add_executable(logger_transcript_old test/transcript.cc test/frozen/logger.cc)
+    target_include_directories(logger_transcript_old BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/test/frozen")
+    target_include_directories(logger_transcript_old PRIVATE "${cppcodec_SOURCE_DIR}")
+    target_link_libraries(logger_transcript_old PRIVATE scheduler::scheduler term_color::term_color)
+    add_test(NAME logger_transcript
+      COMMAND "${CMAKE_COMMAND}" -DNEW=$<TARGET_FILE:logger_transcript_new> -DOLD=$<TARGET_FILE:logger_transcript_old>
+        -DDIR=${CMAKE_CURRENT_BINARY_DIR}/transcript -P "${CMAKE_CURRENT_SOURCE_DIR}/test/transcript.cmake")
+  endif()
 endif()
 
 # Producer-cost benchmark (opt-in): fetches fmt for the synchronous comparator only.
@@ -82,4 +117,10 @@ if(LOGGER_BUILD_BENCH AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   FetchContent_MakeAvailable(fmt)
   add_executable(logger_bench bench/lg.cc)
   target_link_libraries(logger_bench PRIVATE logger fmt::fmt)
+  # Where a producer's time goes (each piece alone), a profiling loop, and the LOG thread's drain over time.
+  add_executable(logger_parts bench/parts.cc)
+  add_executable(logger_steady bench/steady.cc)
+  target_link_libraries(logger_steady PRIVATE logger)
+  add_executable(logger_drain bench/drain.cc)
+  target_link_libraries(logger_drain PRIVATE logger)
 endif()

@@ -10,6 +10,7 @@
 // for every kind of line, including `clears` lines, which wait for their handle to be
 // dropped to be cancelled.
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -33,9 +34,15 @@ using namespace std::chrono_literals;
 struct Capture : Logger {
 	std::mutex m;
 	std::vector<std::string> lines;
+	std::atomic<int> stall_ms{0};   // the LOG thread sleeps this long in the next write (once)
 	void log(int, std::string_view sv, bool, bool) override {
-		std::lock_guard l(m);
-		lines.emplace_back(sv);
+		{
+			std::lock_guard l(m);
+			lines.emplace_back(sv);
+		}
+		if (int ms = stall_ms.exchange(0); ms != 0) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+		}
 	}
 };
 
@@ -61,6 +68,26 @@ int main() {
 	constexpr int kRounds = 40, kPerRound = 400;
 	long pairs_checked = 0;
 	for (int round = 0; round < kRounds; ++round) {
+		// Every other round the LOG thread is busy (writing a slow line) while the lines are logged, so
+		// it files them overdue, all at once: the order must hold then too.
+		const bool stall = round % 2 == 1;
+		const size_t extra = stall ? 1 : 0;
+		if (stall) {
+			c->stall_ms = 20;
+			// Due 2 ms out, so it goes through the wheel: the LOG thread walks the wheel again as soon as
+			// the write returns, and that walk moves the floor that overdue lines are filed at.
+			Logging::do_log(false, std::chrono::steady_clock::now() + 2ms, true, LOG_INFO, "stall");
+			for (int i = 0; i < 5000; ++i) {
+				{
+					std::lock_guard l(c->m);
+					if (!c->lines.empty()) {
+						break;
+					}
+				}
+				std::this_thread::sleep_for(100us);
+			}
+			std::this_thread::sleep_for(2ms);   // the LOG thread is inside the write
+		}
 		std::vector<std::chrono::steady_clock::time_point> due(kPerRound);
 		std::vector<Log> handles;   // `clears` lines are cancelled when their handle goes
 		handles.reserve(kPerRound);
@@ -80,7 +107,7 @@ int main() {
 		for (int i = 0; i < 5000; ++i) {
 			{
 				std::lock_guard l(c->m);
-				if (c->lines.size() >= static_cast<size_t>(kPerRound)) {
+				if (c->lines.size() >= static_cast<size_t>(kPerRound) + extra) {
 					break;
 				}
 			}
@@ -90,9 +117,13 @@ int main() {
 		handles.clear();
 
 		std::lock_guard l(c->m);
-		CHECK(c->lines.size() == static_cast<size_t>(kPerRound));
+		CHECK(c->lines.size() == static_cast<size_t>(kPerRound) + extra);
 		std::vector<int> position(kPerRound, -1);
 		for (size_t k = 0; k < c->lines.size(); ++k) {
+			if (stall && k == 0) {
+				CHECK(c->lines[0].find("stall") != std::string::npos);
+				continue;
+			}
 			int i = index_of(c->lines[k]);
 			CHECK(i >= 0 && i < kPerRound && position[i] == -1);
 			position[i] = static_cast<int>(k);

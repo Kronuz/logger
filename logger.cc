@@ -38,11 +38,16 @@
 #include <exception>       // for std::rethrow_exception
 #include <fcntl.h>         // for open, O_WRONLY, O_CREAT, O_APPEND
 #include <functional>      // for std::hash
+#include <limits>          // for std::numeric_limits
 #include <mutex>           // for std::mutex, std::lock_guard
 #include <sstream>         // for std::ostringstream
 #include <system_error>   // for std::system_error
+#include <type_traits>    // for std::is_same_v, std::decay_t
 #include <unordered_set>   // for std::unordered_set
 #include <unistd.h>        // for write, isatty, close, STDERR_FILENO
+#if defined(__APPLE__)
+#include <mach/mach_time.h>   // for mach_continuous_time, mach_timebase_info
+#endif
 
 using namespace std::chrono_literals;
 
@@ -50,8 +55,169 @@ using namespace std::chrono_literals;
 LogConfig Logging::config;
 LogHooks Logging::hooks;
 std::vector<std::unique_ptr<Logger>> Logging::handlers;
-std::atomic<long> Logging::pending{0};
-std::atomic<long> Logging::dropped{0};
+Logging::Counter Logging::posted_[logger_detail::kStripes];
+Logging::Counter Logging::completed_;
+Logging::Counter Logging::dropped_;
+
+
+// This thread's state, created on first use: threads take counter stripes in turn, so producers
+// share a cache line of the lines-posted counters only when there are more of them than stripes.
+logger_detail::ThreadState&
+logger_detail::thread_state() noexcept
+{
+	static thread_local ThreadState state = [] {
+		static std::atomic<unsigned> next{0};
+		ThreadState s;
+		s.id = std::this_thread::get_id();
+		s.stripe = next.fetch_add(1, std::memory_order_relaxed) % kStripes;
+		return s;
+	}();
+	return state;
+}
+
+Logging::Counter&
+Logging::stripe() noexcept
+{
+	return posted_[logger_detail::thread_state().stripe];
+}
+
+
+namespace {
+// Frees the thread's message buffers when the thread ends; a log call made after that (from
+// another thread-local's destructor) formats into its own string.
+struct ScratchOwner {
+	~ScratchOwner() {
+		auto& slot = logger_detail::scratch_slot;
+		delete[] slot.buf;
+		delete slot.text;
+		slot.buf = nullptr;
+		slot.cap = 0;
+		slot.text = nullptr;
+		slot.dead = true;
+	}
+};
+constexpr std::size_t kScratchStart = 512;
+constexpr std::size_t kScratchMax = std::size_t{1} << 20;
+}  // namespace
+
+bool
+logger_detail::scratch_init() noexcept
+{
+	static thread_local ScratchOwner owner;
+	(void)owner;
+	if (scratch_slot.dead) {
+		return false;
+	}
+	try {
+		auto* text = new std::string();
+		text->reserve(256);
+		scratch_slot.text = text;
+		scratch_slot.buf = new char[kScratchStart];
+		scratch_slot.cap = kScratchStart;
+	} catch (...) {
+		delete scratch_slot.text;
+		scratch_slot.text = nullptr;
+		scratch_slot.buf = nullptr;
+		scratch_slot.cap = 0;
+		return false;
+	}
+	return true;
+}
+
+char*
+logger_detail::scratch_grow() noexcept
+{
+	if (scratch_slot.cap >= kScratchMax) {
+		return nullptr;
+	}
+	try {
+		auto* bigger = new char[scratch_slot.cap * 2];
+		delete[] scratch_slot.buf;
+		scratch_slot.buf = bigger;
+		scratch_slot.cap *= 2;
+	} catch (...) {
+		return nullptr;
+	}
+	return scratch_slot.buf;
+}
+
+namespace {
+#if defined(__APPLE__)
+// mach_continuous_time in nanoseconds: the clock behind steady_clock::now() here (CLOCK_MONOTONIC_RAW).
+struct MachClock {
+	std::uint32_t numer = 1, denom = 1;
+	bool usable = false;
+	MachClock() {
+		mach_timebase_info_data_t tb;
+		if (mach_timebase_info(&tb) != KERN_SUCCESS || tb.numer == 0 || tb.denom == 0) {
+			return;
+		}
+		numer = tb.numer;
+		denom = tb.denom;
+		// Agree with steady_clock to a millisecond, or leave it alone.
+		auto before = std::chrono::steady_clock::now();
+		auto mine = now_ns();
+		auto after = std::chrono::steady_clock::now();
+		auto lo = std::chrono::duration_cast<std::chrono::nanoseconds>(before.time_since_epoch()).count() - 1'000'000;
+		auto hi = std::chrono::duration_cast<std::chrono::nanoseconds>(after.time_since_epoch()).count() + 1'000'000;
+		usable = static_cast<std::int64_t>(mine) >= lo && static_cast<std::int64_t>(mine) <= hi;
+	}
+	std::uint64_t now_ns() const noexcept {
+		return mach_continuous_time() * numer / denom;
+	}
+};
+const MachClock mach_clock;
+#endif
+}  // namespace
+
+std::chrono::steady_clock::time_point
+logger_detail::steady_now() noexcept
+{
+#if defined(__APPLE__)
+	if (mach_clock.usable) {
+		return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(static_cast<std::int64_t>(mach_clock.now_ns())));
+	}
+#endif
+	return std::chrono::steady_clock::now();
+}
+
+namespace {
+// system - steady, in nanoseconds, as last measured, and the steady reading it was measured at.
+// Separate atomics on one line: producers read them on every line and write them every 20 ms; a
+// pair torn between two measurements is as good as either.
+struct alignas(64) ClockOffset {
+	std::atomic<std::int64_t> offset{0};
+	std::atomic<std::int64_t> at{std::numeric_limits<std::int64_t>::min()};
+};
+ClockOffset clock_offset;
+constexpr std::int64_t kClockResync = 20'000'000;   // ns
+}  // namespace
+
+std::chrono::system_clock::time_point
+logger_detail::system_at(std::chrono::steady_clock::time_point now)
+{
+	using namespace std::chrono;
+	const std::int64_t n = duration_cast<nanoseconds>(now.time_since_epoch()).count();
+	const std::int64_t at = clock_offset.at.load(std::memory_order_relaxed);
+	// A reading a few ns older than the measurement (another thread measured meanwhile) is as good as one after it.
+	const bool fresh = at != std::numeric_limits<std::int64_t>::min() && n - at < kClockResync && at - n < kClockResync;
+	if (!fresh) {   // never measured, or the measurement is 20 ms old
+		const auto before = logger_detail::steady_now();
+		const auto wall = system_clock::now();
+		const auto after = logger_detail::steady_now();
+		const std::int64_t b = duration_cast<nanoseconds>(before.time_since_epoch()).count();
+		const std::int64_t a = duration_cast<nanoseconds>(after.time_since_epoch()).count();
+		const std::int64_t w = duration_cast<nanoseconds>(wall.time_since_epoch()).count();
+		const std::int64_t mid = b + (a - b) / 2;
+		clock_offset.offset.store(w - mid, std::memory_order_relaxed);
+		clock_offset.at.store(mid, std::memory_order_relaxed);
+		return wall;
+	}
+	return system_clock::time_point(duration_cast<system_clock::duration>(
+		nanoseconds(n + clock_offset.offset.load(std::memory_order_relaxed))));
+}
+
+
 
 
 // Thread-local stacked-indent depth. Per-thread by construction, so it needs no
@@ -59,8 +225,7 @@ std::atomic<long> Logging::dropped{0};
 int&
 log_indent() noexcept
 {
-	thread_local int depth = 0;
-	return depth;
+	return logger_detail::thread_state().indent;
 }
 
 
@@ -544,9 +709,30 @@ Logging::Logging(std::string&& str_, bool clears_, bool async_, bool info_, uint
 	  info(info_),
 	  once(once_),
 	  eptr(std::move(eptr_)),
-	  thread_id(std::this_thread::get_id()),
+	  thread_id(logger_detail::thread_state().id),
 	  loc(loc_),
-	  indent(log_indent()),
+	  indent(logger_detail::thread_state().indent),
+	  scheduled(false),
+	  timestamp(timestamp_),
+	  atom_cleaned_at(std::chrono::steady_clock::time_point{}),
+	  unlog_priority(0)
+{
+}
+
+Logging::Logging(std::string&& str_, bool clears_, bool async_, bool info_, uint64_t once_, int priority_,
+		std::source_location loc_,
+		std::chrono::steady_clock::time_point created_at,
+		std::chrono::system_clock::time_point timestamp_)
+	: Base(created_at),
+	  str(std::move(str_)),
+	  priority(priority_),
+	  clears(clears_),
+	  async(async_),
+	  info(info_),
+	  once(once_),
+	  thread_id(logger_detail::thread_state().id),
+	  loc(loc_),
+	  indent(logger_detail::thread_state().indent),
 	  scheduled(false),
 	  timestamp(timestamp_),
 	  atom_cleaned_at(std::chrono::steady_clock::time_point{}),
@@ -561,7 +747,8 @@ Logging::~Logging() noexcept
 	} catch (...) {
 	}
 	if (scheduled) {
-		pending.fetch_sub(1, std::memory_order_relaxed);
+		// release: whoever sees the count drained (acquire in pending_count) sees the line's writes.
+		completed_.n.fetch_add(1, std::memory_order_release);
 	}
 }
 
@@ -609,8 +796,36 @@ Logging::do_log(bool clears, std::chrono::steady_clock::time_point wakeup, bool 
 {
 	if (priority <= config.log_level) {
 		auto now = std::chrono::steady_clock::now();
-		return add(wakeup, std::move(str), clears, async, info, once, priority, std::move(eptr), loc,
+		return add(wakeup, std::move(str), clears, async, info, once, priority, eptr ? &eptr : nullptr, loc,
 			now, std::chrono::system_clock::now(), now);
+	}
+	return Log();
+}
+
+
+Log
+Logging::do_log_in(bool clears, std::chrono::steady_clock::duration delay, bool async, bool info,
+		uint64_t once, int priority, logger_detail::NoException, std::source_location loc,
+		const logger_detail::FormattedMsg& msg)
+{
+	if (priority <= config.log_level) {
+		auto now = logger_detail::steady_now();
+		return add(now + delay, msg.view(), clears, async, info, once, priority, nullptr, loc,
+			now, logger_detail::system_at(now), now);
+	}
+	return Log();
+}
+
+
+Log
+Logging::do_log_in(bool clears, std::chrono::steady_clock::duration delay, bool async, bool info,
+		uint64_t once, int priority, std::exception_ptr eptr, std::source_location loc,
+		const logger_detail::FormattedMsg& msg)
+{
+	if (priority <= config.log_level) {
+		auto now = logger_detail::steady_now();
+		return add(now + delay, msg.view(), clears, async, info, once, priority, eptr ? &eptr : nullptr, loc,
+			now, logger_detail::system_at(now), now);
 	}
 	return Log();
 }
@@ -627,7 +842,32 @@ Logging::do_log(bool clears, std::chrono::steady_clock::time_point wakeup, bool 
 
 Log
 Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bool clears, bool async, bool info,
-		uint64_t once, int priority, std::exception_ptr eptr, std::source_location loc,
+		uint64_t once, int priority, std::exception_ptr* eptr, std::source_location loc,
+		std::chrono::steady_clock::time_point created_at,
+		std::chrono::system_clock::time_point timestamp,
+		std::chrono::steady_clock::time_point now)
+{
+	return add_line(wakeup, std::move(str), clears, async, info, once, priority, eptr, loc,
+		created_at, timestamp, now);
+}
+
+
+Log
+Logging::add(std::chrono::steady_clock::time_point wakeup, std::string_view str, bool clears, bool async, bool info,
+		uint64_t once, int priority, std::exception_ptr* eptr, std::source_location loc,
+		std::chrono::steady_clock::time_point created_at,
+		std::chrono::system_clock::time_point timestamp,
+		std::chrono::steady_clock::time_point now)
+{
+	return add_line(wakeup, str, clears, async, info, once, priority, eptr, loc,
+		created_at, timestamp, now);
+}
+
+
+template <typename Msg>
+Log
+Logging::add_line(std::chrono::steady_clock::time_point wakeup, Msg&& str, bool clears, bool async, bool info,
+		uint64_t once, int priority, std::exception_ptr* eptr, std::source_location loc,
 		std::chrono::steady_clock::time_point created_at,
 		std::chrono::system_clock::time_point timestamp,
 		std::chrono::steady_clock::time_point now)
@@ -644,7 +884,8 @@ Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bo
 	// due 0.3 ms ahead overtake an immediate line logged before it.) A line is written up
 	// to kCoalesce after the call; finish() drains the wheel, so it is not lost there.
 	const auto due_at = wakeup;
-	if (will_schedule && wakeup < now + kCoalesce) {
+	const bool soon = will_schedule && wakeup <= now + kCoalesce;
+	if (soon) {
 		wakeup = now + kCoalesce;
 	}
 
@@ -653,25 +894,40 @@ Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bo
 	// deferred ("clears") lines are never dropped. The drop is counted and a
 	// coalesced summary is emitted by the next line that fires.
 	if (will_schedule && config.max_pending > 0
-			&& pending.load(std::memory_order_relaxed) >= static_cast<long>(config.max_pending)
+			&& pending_count() >= static_cast<long>(config.max_pending)
 			&& !clears && priority >= LOG_NOTICE) {
-		dropped.fetch_add(1, std::memory_order_relaxed);
+		dropped_.n.fetch_add(1, std::memory_order_relaxed);
 		return Log();
 	}
 
-	auto entry = std::make_shared<Logging>(std::move(str), clears, async, info, once, priority,
-		std::move(eptr), loc, created_at, timestamp);
+	std::shared_ptr<Logging> entry;
+	if constexpr (std::is_same_v<std::decay_t<Msg>, std::string_view>) {
+		entry = std::make_shared<Logging>(std::string(), clears, async, info, once, priority,
+			loc, created_at, timestamp);
+		entry->str.assign(str.data(), str.size());
+	} else {
+		entry = std::make_shared<Logging>(std::move(str), clears, async, info, once, priority,
+			loc, created_at, timestamp);
+	}
+	if (eptr != nullptr) {
+		entry->eptr = std::move(*eptr);
+	}
 
 	if (will_schedule) {
 		// async ("now") and deferred ("now + delay") lines ride the wheel; the
-		// LOG thread fires operator() and writes them.
+		// LOG thread fires operator() and writes them. They are handed to it with
+		// one compare-exchange; it files them into the wheel itself.
 		entry->scheduled = true;
-		pending.fetch_add(1, std::memory_order_relaxed);
-		if (scheduler().add(entry, wakeup) != schedule_result::scheduled) {
-			// Refused (stopping, past the 24 h horizon, or no memory); undo the
-			// count. The policy goes by the line's kind, not the reason.
+		auto& counter = stripe();
+		counter.n.fetch_add(1, std::memory_order_relaxed);
+		// A line due within the tick of its call is due exactly kCoalesce after it, so those arrive in
+		// due order and the LOG thread queues them without a wheel insert; the others are filed in the wheel.
+		auto result = soon ? scheduler().post_ordered(entry, wakeup, now) : scheduler().post(entry, wakeup, now);
+		if (result != schedule_result::scheduled) {
+			// Refused (stopping, or past the 24 h horizon); undo the count. The
+			// policy goes by the line's kind, not the reason.
 			entry->scheduled = false;
-			pending.fetch_sub(1, std::memory_order_relaxed);
+			counter.n.fetch_sub(1, std::memory_order_relaxed);
 			bool due = due_at <= std::chrono::steady_clock::now();
 			if (clears && !due) {
 				// A slow-work watchdog: never written now (that would log every fast
@@ -690,7 +946,7 @@ Logging::add(std::chrono::steady_clock::time_point wakeup, std::string&& str, bo
 		(*entry)();
 	}
 
-	return Log(entry);
+	return Log(std::move(entry));
 }
 
 
@@ -698,8 +954,10 @@ void
 Logging::operator()()
 {
 	// Report any lines dropped under backpressure since the last fire.
-	if (auto d = dropped.exchange(0, std::memory_order_relaxed); d > 0) {
-		log(LOG_WARNING, "dropped " + std::to_string(d) + " log lines (backpressure)");
+	if (dropped_.n.load(std::memory_order_relaxed) != 0) {
+		if (auto d = dropped_.n.exchange(0, std::memory_order_relaxed); d > 0) {
+			log(LOG_WARNING, "dropped " + std::to_string(d) + " log lines (backpressure)");
+		}
 	}
 
 	// `once` dedup: emit only the first occurrence of this (message, token).
@@ -796,12 +1054,16 @@ Logging::clean()
 		}
 	}
 
-	auto now = std::chrono::steady_clock::now();
+	// Already cleaned (the handle's drop got here first): nothing to do, and no clock read.
 	std::chrono::steady_clock::time_point c{};
+	if (atom_cleaned_at.load(std::memory_order_relaxed) != c) {
+		return;
+	}
+	auto now = logger_detail::steady_now();
 	if (atom_cleaned_at.compare_exchange_strong(c, now)) {
 		if (!unlog_str.empty() && unlog_priority <= config.log_level) {
 			add(now, std::move(unlog_str), false, async, info, 0, unlog_priority,
-				std::exception_ptr{}, loc, atom_created_at.load(), timestamp, now);
+				nullptr, loc, atom_created_at.load(), timestamp, now);
 			unlog_str.clear();
 		}
 	}
