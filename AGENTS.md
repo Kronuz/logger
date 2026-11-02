@@ -26,11 +26,14 @@ ARCHITECTURE.md; for usage see README.md and docs/API.md; for open design work s
   against the library and against a frozen copy of the implementation before the producer
   path changed (`5299eb3`); the bytes must be identical. Never edit `test/frozen/`.
 - `test/clock.cc` — `steady_now()` and `system_at()` against `steady_clock` and `system_clock`.
+- `test/wake.cc` — an isolated line is written at once, and one logged while a line is pending
+  waits for the 1 ms batch.
 - `test/order.cc`, `test/timestamp.cc`, `test/tint.cc` — the ordering oracle, the timestamp
   formatter against its frozen `snprintf` form, and the tint/collapse paths.
 - `bench/lg.cc` (`logger_bench`) — producer cost against a synchronous fmt sink; `bench/parts.cc`
   (each piece of a call alone), `bench/steady.cc` (a profiling loop), `bench/drain.cc` (the LOG
-  thread's drain over time). Built with `-DLOGGER_BUILD_BENCH=ON`.
+  thread's drain over time), `bench/latency.cc` (an isolated line from the call to its handler).
+  Built with `-DLOGGER_BUILD_BENCH=ON`.
 - `CMakeLists.txt` — FetchContents `scheduler`, builds the static library, and
   wires the test and demo when this repo is the top-level project.
 
@@ -126,9 +129,17 @@ cmake --build build-tsan && ./build-tsan/logger_test
   decides what an error looks like (the format string itself). `test/format.cc` checks every
   accepted message against `std::vformat`; extend its generators when you widen the fast path.
 - **A line due within a tick of its call is posted ordered.** `Logging::add_line` posts a line
-  whose wakeup is at or before `now + kCoalesce` with `post_ordered` (its wakeup is exactly
+  whose wakeup is at or before `now + kCoalesce` with `post_ordered` (its wakeup is
   `now + kCoalesce`, so one thread's wakeups never decrease, which is what the scheduler's arrival
-  queue wants of a poster); every other line goes through `post` into the wheel. Across threads
+  queue wants of a poster); every other line goes through `post` into the wheel. The exception
+  starts a batch: a line that is not `clears`, whose thread posted no such line in the last
+  `kCoalesce` (`ThreadState::last_soon`), and that finds `pending_count()` at 0 keeps its own
+  wakeup (no earlier than `now`), so the LOG thread is woken and an isolated line is written at
+  once. Keep all three conditions: without the pending check a thread's first line after a pause
+  signals the LOG thread even while it has lines to write (the batching that spares producers the
+  signal is gone), without the gap a thread's wakeups can decrease, and a `clears` line needs the
+  full tick for its handle to cancel it. `test/wake.cc` fails if the exception is gone, or if
+  it fires while a line is pending. Across threads
   the wakeups can fall out of order by the gap between a thread's clock read and its push, so a
   line may wait behind a later-due head, by up to that gap. The guarantee is the one `test/order.cc`
   states: of two lines whose logging is ordered (one thread, or one thread's push completing before

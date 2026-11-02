@@ -88,6 +88,11 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(logger_producer_test PRIVATE logger)
   add_test(NAME logger_producer COMMAND logger_producer_test)
 
+  # How soon a routine line is written: at once when nothing is pending, in the 1 ms batch otherwise.
+  add_executable(logger_wake_test test/wake.cc)
+  target_link_libraries(logger_wake_test PRIVATE logger)
+  add_test(NAME logger_wake COMMAND logger_wake_test)
+
   # Differential test: one scripted run, built against the library and against the frozen copy
   # of the implementation before the producer path changed (test/frozen), must write identical bytes.
   # The frozen copy publishes `Logging::config` to the LOG thread with relaxed counters, so the
@@ -117,10 +122,14 @@ if(LOGGER_BUILD_BENCH AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   FetchContent_MakeAvailable(fmt)
   add_executable(logger_bench bench/lg.cc)
   target_link_libraries(logger_bench PRIVATE logger fmt::fmt)
-  # Where a producer's time goes (each piece alone), a profiling loop, and the LOG thread's drain over time.
+  # Where a producer's time goes (each piece alone), a profiling loop, the LOG thread's drain over time,
+  # and one isolated line's latency.
   add_executable(logger_parts bench/parts.cc)
   add_executable(logger_steady bench/steady.cc)
   target_link_libraries(logger_steady PRIVATE logger)
   add_executable(logger_drain bench/drain.cc)
   target_link_libraries(logger_drain PRIVATE logger)
+  # How long one isolated line takes from the call to its handler.
+  add_executable(logger_latency bench/latency.cc)
+  target_link_libraries(logger_latency PRIVATE logger)
 endif()

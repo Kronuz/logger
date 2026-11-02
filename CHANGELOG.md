@@ -3,6 +3,45 @@
 All notable changes to `logger` are recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 2026-11-01 (isolated lines)
+
+### Changed
+
+- An isolated line is written at once again. Since the 2026-10-31 change below, a line due within
+  1 ms of its call was due 1 ms after it, so a single `L_INFO` with nothing else queued waited for
+  the next tick: about 1.26 ms on an Apple M4 Pro and 1.51 ms on an Intel i9-9980HK from the call to
+  the handler, against 19.7 and 55.6 us before (`ce27b90`; the gate's numbers). Now a line that is
+  not `clears`, whose thread posted no line due within a tick in the last 1 ms, and that finds
+  nothing pending (`pending_count()` is 0) keeps its own due time, and the LOG thread is woken for
+  it; every other line due within a tick is due 1 ms after its call, as before, so a burst is written
+  in 1 ms batches with no signal per line. A thread in a burst reads no counters (the 1 ms gap is
+  checked first), and the gap keeps each thread's ordered wakeups non-decreasing. Ordering is
+  unchanged: a line that finds nothing pending comes after every line logged before it, and lines
+  logged after it count it as pending.
+  Measured with `bench/latency.cc` (one isolated `L_INFO` every 5 ms, 300 lines, call to handler)
+  in one `quiet strict` hold per machine, interleaved with `tools/ab_compare.py` (5 rounds, A/A on
+  START), median (90th percentile) in us:
+
+  | Machine | START (`ce27b90`) | before (`8c21862`) | after | after / START |
+  |---|---:|---:|---:|---:|
+  | Apple M4 Pro | 21.7 (49.3) | 1507 (1514) | 16.8 (46.4) | 1.30x (1.12x) faster |
+  | Intel Core i9-9980HK | 58.5 (96.4) | 1514 (1562) | 42.5 (80.8) | 1.28x (1.22x) faster |
+
+  The throughput benches against `8c21862` in the same holds (the ratio before / after, with its
+  A/A ratio): every `bench/lg.cc` row, `bench/drain.cc` and `bench/steady.cc` are within the A/A
+  noise. On the M4 Pro the one-producer draining row reads 0.918 (A/A 0.909) and the rest 0.99 to
+  1.07; on the i9 the four-producer draining row reads 0.966 (A/A 0.993, range 0.94 to 1.08) and
+  the rest 0.99 to 1.05.
+
+### Added
+
+- `test/wake.cc`: an isolated line with nothing pending is written within 900 us (median of 15), and
+  one logged while a watchdog is held waits for the 1 ms batch. With the change reverted the first
+  check fails (median 1515 us on an Apple M1 Pro); without the pending check (a mutant) the second
+  does (33 us).
+- `bench/latency.cc` (`logger_latency`): the time from an isolated `L_INFO` to its handler, 300 lines
+  5 ms apart, median and 90th percentile.
+
 ## 2026-11-01
 
 ### Tests

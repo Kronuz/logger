@@ -106,8 +106,9 @@ Not for:
 
 - **Structured logging.** Sinks receive formatted text lines, not fields.
 - **A single-threaded tool.** Plain `std::fprintf(stderr, ...)` is simpler.
-- **Crash-proof routine lines.** A routine line is written up to 1 ms after the
-  call, so a hard crash within that millisecond loses it; `Logging::finish()`
+- **Crash-proof routine lines.** A routine line logged while nothing is pending
+  is written at once, but one logged while lines are pending waits for the next
+  1 ms batch, so a hard crash within that millisecond loses it; `Logging::finish()`
   drains the wheel before exit.
 - **One order across severities.** Lines more severe than `LOG_ERR`, and lines
   due at once that are logged after `Logging::finish()` begins, are written at
@@ -141,13 +142,24 @@ A synchronous call is cheaper on one thread on both machines and on four threads
 Pro; on the i9 four producers sharing one mutex pay more than four handing lines to the LOG
 thread.
 
+`bench/latency.cc` times one isolated `L_INFO` (300 of them, 5 ms apart, so nothing is pending
+when each is logged) from the call until the handler runs, in microseconds. Such a line is
+written at once; a line logged while others are pending waits for the next 1 ms batch instead.
+
+| Machine | median | 90th percentile |
+|---|---:|---:|
+| Apple M4 Pro | 17 | 46 |
+| Intel Core i9-9980HK | 43 | 81 |
+
 Apple M4 Pro (arm64), macOS 26.7.2, and Intel Core i9-9980HK (x86_64), macOS 15.8.1, both
-with Apple clang 17.0.0 and `-O3 -DNDEBUG`, at `1f856e9`:
+with Apple clang 17.0.0 and `-O3 -DNDEBUG`; the producer table at `1f856e9`, the latency table
+at the commit that added `bench/latency.cc`:
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DLOGGER_BUILD_BENCH=ON
-cmake --build build --target logger_bench
+cmake --build build --target logger_bench logger_latency
 ./build/logger_bench
+./build/logger_latency
 ```
 
 [ARCHITECTURE.md](ARCHITECTURE.md#what-one-call-costs) breaks one call down into its pieces;
@@ -174,7 +186,7 @@ ctest --test-dir build
 ```
 
 `./build/logger_demo` runs the demo. Add `-DLOGGER_BUILD_BENCH=ON` to build
-`logger_bench`, `logger_parts`, `logger_steady`, and `logger_drain`; it fetches
+`logger_bench`, `logger_parts`, `logger_steady`, `logger_drain`, and `logger_latency`; it fetches
 fmt for the comparator.
 
 ## 🤝 Contributing

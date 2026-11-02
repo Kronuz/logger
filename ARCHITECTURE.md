@@ -36,9 +36,12 @@ L_DELAYED(100ms, ...)       --> Logging task @ now+d --/                  (LOG t
    on its way to disk before the caller moves on.
 
 2. **Async, "now."** The calling thread renders the message into its own reusable
-   buffer, copies it into a `Logging` task keyed 1 ms after the call (the wheel's
-   tick), and posts the task to the scheduler. The single LOG thread files the task
-   into the wheel, and on its next pass does the decoration and the write. This is
+   buffer, copies it into a `Logging` task, and posts the task to the scheduler. The
+   task is keyed at the call when nothing is pending, and the LOG thread is woken
+   for it, so an isolated line is written at once; while lines are pending it is
+   keyed 1 ms after the call (the wheel's tick), so a burst is written in 1 ms
+   batches and its lines need no signal. The single LOG thread files the task, and
+   on its next pass does the decoration and the write. This is
    the path for `ERR` and everything less
    severe (`WARNING`, `NOTICE`, `INFO`, `DEBUG`), set by `priority >= ASYNC_LOG_LEVEL`.
    The caller never touches the output fd, so a worker thread spewing logs never
@@ -136,8 +139,13 @@ A routine `L_INFO` does this on the calling thread and nothing else:
    and indent come from one thread-local block.
 5. Post it: one compare-exchange onto the scheduler's lock-free stack, and a signal only if the
    LOG thread sleeps past the line (once per sleep, however many lines arrive). A line due
-   within a tick of its call is due exactly 1 ms after it, so one thread's wakeup times never
-   decrease: it goes through `post_ordered`. Any other line (a deferred one) goes through `post`.
+   within a tick of its call goes through `post_ordered`; any other line (a deferred one) goes
+   through `post`. Such a line is due exactly 1 ms after its call (a batch: no signal), unless
+   it starts one: when nothing is pending (`pending_count()` is 0, so every line logged before
+   it has been written or cancelled), it is not a `clears` line, and its thread posted no such
+   line in the last 1 ms, it is due at its own time, no earlier than the call, and the LOG
+   thread is woken for it. The 1 ms gap keeps one thread's wakeup times non-decreasing, and a
+   thread in a burst batches without reading the counters.
    Two threads' lines can reach the stack in a different order from their clock reads (a thread
    can be preempted between the two), so the queue may hold a line behind one due a little later,
    by up to that gap; the order the log promises is the one between lines whose logging is itself
@@ -179,9 +187,12 @@ logging from many threads stays a burst of independent cheap inserts, and no
 thread's tail latency spikes because another thread is mid-log. The second is
 **one consumer, ordered output**: a single drain thread emits lines in slot order
 with no write lock and no interleaving. A line due within 1 ms of the call is moved to
-call time + 1 ms, whatever its kind: `max(due, now + 1 ms)` is non-decreasing in both the due
-time and the call time, so the first of two lines due in logging order never lands in a
-later tick, and the wheel keeps insertion order within a tick (`test/order.cc`).
+call time + 1 ms, whatever its kind, while other lines are pending: `max(due, now + 1 ms)` is
+non-decreasing in both the due time and the call time, so the first of two lines due in
+logging order never lands in a later tick, and the wheel keeps insertion order within a tick
+(`test/order.cc`). A line that finds nothing pending keeps its own due time: every line logged
+before it has already been written, and every line logged after it is counted pending until
+it is, so they are batched behind it (`test/wake.cc`).
 
 There is an honest wrinkle worth stating. The routine "now" logs all land near the
 current instant, which is the convergent-key pattern, the one the wheel is

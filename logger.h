@@ -190,6 +190,7 @@ struct ThreadState {
 	std::thread::id id;
 	int indent = 0;
 	unsigned stripe = 0;
+	std::chrono::steady_clock::time_point last_soon{};   // the call time of this thread's last line due within a tick
 };
 ThreadState& thread_state() noexcept;
 

@@ -874,19 +874,33 @@ Logging::add_line(std::chrono::steady_clock::time_point wakeup, Msg&& str, bool 
 {
 	bool will_schedule = async || wakeup > now;
 
-	// A line on the wheel due within kCoalesce of now rides the wheel at now + kCoalesce:
-	// the LOG thread then sleeps to that time, and the lines queued meanwhile are due
-	// later than its wake time, so they need no signal. The shift is max(wakeup, now +
-	// kCoalesce) for every scheduled line, `clears` ones included, which is non-decreasing
-	// in both the due time and the call time: of two lines due in the order they were
-	// logged, the first never lands in a later tick than the second, and the wheel keeps
-	// insertion order within a tick. (Shifting only some kinds of line would let a line
-	// due 0.3 ms ahead overtake an immediate line logged before it.) A line is written up
-	// to kCoalesce after the call; finish() drains the wheel, so it is not lost there.
+	// A line due within kCoalesce of now is batched: it is due at now + kCoalesce, so the
+	// LOG thread sleeps to that time, and the lines queued meanwhile are due later than its
+	// wake time and need no signal. The shift is max(wakeup, now + kCoalesce), which is
+	// non-decreasing in both the due time and the call time: of two lines due in the order
+	// they were logged, the first never lands in a later tick than the second, and the
+	// queue keeps posting order within a tick. finish() drains it, so a line is not lost
+	// there.
+	//
+	// A line that would start a batch is not held: when nothing is pending (every line
+	// logged before it has been written or cancelled) it is due at its own time, no
+	// earlier than the call, and the LOG thread is woken for it, so an isolated line is
+	// written at once. A thread that posted such a line under kCoalesce ago is in a
+	// burst and batches without looking (pending_count() reads every counter); the gap
+	// also keeps this thread's ordered wakeups non-decreasing. A `clears` line always
+	// waits the full kCoalesce, so its handle can still cancel it.
 	const auto due_at = wakeup;
 	const bool soon = will_schedule && wakeup <= now + kCoalesce;
 	if (soon) {
-		wakeup = now + kCoalesce;
+		auto& ts = logger_detail::thread_state();
+		if (!clears && now - ts.last_soon >= kCoalesce && pending_count() == 0) {
+			if (wakeup < now) {
+				wakeup = now;
+			}
+		} else {
+			wakeup = now + kCoalesce;
+		}
+		ts.last_soon = now;
 	}
 
 	// Backpressure: when the wheel is saturated, drop routine async lines (NOTICE
