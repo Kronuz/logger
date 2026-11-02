@@ -1,7 +1,8 @@
-# Status: perf/logger-rings-v2
+# Status: producer rings (logger#1)
 
 Workstream: the producer's cost of one routine line (`L_INFO("value {} and {}", i, "x")`), logger#1.
-Branch `perf/logger-rings-v2` (base `main` a82454b), from the prototype on `perf/logger-rings` (7a8bce8).
+Landed on `main` from `perf/logger-rings-v2` (base a82454b); the prototype was `perf/logger-rings`
+(7a8bce8). Both branches are deleted.
 
 ## Done criteria
 
@@ -19,7 +20,9 @@ Branch `perf/logger-rings-v2` (base `main` a82454b), from the prototype on `perf
 
 ## State
 
-Done, landing. The bar is met on the Apple M4 Pro (every row below fmt + mutex) and in bursts on
+Landed: 21e9642 (the queues) and fb843c0 (the wake test runs alone; beside the queue test's 16
+producers on linux-x86_64-gcc its median wakeup passed 900 us), CI run 41396610451 green on every
+job. The bar is met on the Apple M4 Pro (every row below fmt + mutex) and in bursts on
 the i9-9980HK; one producer back to back on the i9 pays 83 ns against fmt + mutex's 62, so
 logger#1 stays open with the numbers. Every row is faster than main on both machines, or within
 the A/A noise (latency).
