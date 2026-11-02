@@ -92,6 +92,8 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_executable(logger_wake_test test/wake.cc)
   target_link_libraries(logger_wake_test PRIVATE logger)
   add_test(NAME logger_wake COMMAND logger_wake_test)
+  # A latency bound: alone, so another test's threads do not delay the LOG thread's wakeup.
+  set_tests_properties(logger_wake PROPERTIES RUN_SERIAL TRUE)
 
   # The per-thread queues: exactly once and in order from 4 to 16 producers, order between threads,
   # the sleep handshake, threads that end, exit without finish(), finish() racing 16 producers.
