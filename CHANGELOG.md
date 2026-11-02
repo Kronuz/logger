@@ -57,7 +57,11 @@ Upgrading a pin from before 2026-10-30: [the consumer upgrade note](https://gith
 ### Added
 
 - `test/queue.cc` (`logger_queue`): the queues under 1 to 16 producers; the wrap at every offset
-  short of a header (`logger_queue_test wrap`; under ASan the old wrap reports a heap-buffer-overflow),
+  short of a header (`logger_queue_test wrap`; under ASan the old wrap reports a heap-buffer-overflow);
+  the wrap at its exact boundary (the LOG thread parked, the buffer filled to 0 to 72 bytes short of
+  its end, then a line of every size around the room left: it wraps only if the padding and the line
+  both fit, else the queue moves to a bigger buffer; a wrap that checks room for the line alone fails
+  it in 45 of its 95 cases);
   exactly once and in order, order across threads and by due time with records due 0 to 3.5 ms out,
   watchdogs armed and dropped from 16 threads, backpressure, swaps, the sleep handshake,
   short-lived threads, exit without `finish()`, and `finish()` racing 16 producers.

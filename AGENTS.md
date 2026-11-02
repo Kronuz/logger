@@ -153,10 +153,13 @@ cmake --build build-tsan && ./build-tsan/logger_test
   sleeping (and wakes it if the line is due before `worker_wake`) or closed (and writes the line
   itself unless the last look took it). Weakening either side loses a wakeup or a line at
   `finish()`; the sleep handshake and finish race in `test/queue.cc` catch it.
-- **A wrap is only a record head.** `ring_room` pads to the end of the buffer with an 8-byte
-  `RecordHead` written with `memcpy`, whatever room is left. A placement `new` of a `LineRecord`
-  there (whose `std::source_location` member's constructor writes) overran the buffer by up to
-  its header; `logger_queue_test wrap` under ASan catches it.
+- **A wrap is only a record head, and needs room for the padding and the record.** `ring_room`
+  pads to the end of the buffer with an 8-byte `RecordHead` written with `memcpy`, whatever room is
+  left, and wraps only if the room (up to the published read index) holds the padding and the record;
+  otherwise it moves to a bigger buffer. A placement `new` of a `LineRecord` there (whose
+  `std::source_location` member's constructor writes) overran the buffer by up to its header, and a
+  wrap with room for the record alone writes it over unread lines; `logger_queue_test wrap` (its
+  every-offset and boundary tests, under ASan) catches both.
 - **`pending_count()` is a difference.** Each queue counts its own lines in `posted` (only its
   thread writes it), `completed_` counts what left the queues (the LOG thread adds its written lines
   once per pass, a record adds itself as it is destroyed; release adds, so a reader

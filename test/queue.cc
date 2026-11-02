@@ -1,11 +1,11 @@
 // The per-thread queues under load (ARCHITECTURE.md, "The per-thread queues").
 //
-//   1. exactly once, in each thread's order: 4, 8 and 16 producers mixing routine lines (formatted in
+//   1. exactly once, in each thread's order: 1, 2, 4, 8 and 16 producers mixing routine lines (formatted in
 //      place), lines std::vformat formats (copied in), long lines (the queue wraps and moves to bigger
 //      buffers) and full records (do_log), while the LOG thread drains;
 //   2. order between threads: threads take turns, each logging after it sees the previous line's call
 //      return, through the fast path and as full records; the lines come out in turn order;
-//   3. the sleep handshake: the LOG thread falls asleep after 50 ms idle, and a line logged then is
+//   3. the sleep handshake: the LOG thread sleeps with nothing queued, and a line logged then is
 //      written at once (a lost wakeup leaves it unwritten: the LOG thread has nothing else to wake for);
 //   4. threads that log and end: what they queued is written, their queues are taken by new threads,
 //      and a line logged from a thread-local destructor, before or after the thread's queue is
@@ -13,11 +13,15 @@
 //   5. exit without finish(): a child process logs from several threads and returns from main; every
 //      line is in its file;
 //   6. finish() racing 16 producers: every line is written once (each round is a process);
-//   7. the wrap at the end of a buffer at every offset, each line whole; the order of routine lines and
+//   7. the wrap at the end of a buffer at every offset, at its exact boundary (the LOG thread parked,
+//      the buffer filled to 0 to 72 bytes short of its end, then a line of every size around the room
+//      left) and with the buffer kept near full, each line whole; the order of routine lines and
 //      full records due 0 to 3.5 ms out across turn-taking threads; watchdogs armed and cancelled from
 //      16 threads; backpressure from 16 producers; swaps on routine lines' handles.
 //
-// Usage: logger_queue_test             all of the above
+// Usage: logger_queue_test             all of the above (quick sizes under ThreadSanitizer)
+//        logger_queue_test quick       all of the above, quick sizes
+//        logger_queue_test wrap        the wrap tests alone
 //        logger_queue_test exit FILE   (internal) the child of section 5
 //        logger_queue_test race N      (internal) one round of section 6
 #include <algorithm>
@@ -62,10 +66,23 @@ using namespace std::chrono_literals;
 	} \
 } while (0)
 
+// While `park_on_marker` is set, the handler parks the LOG thread on the line "bnd block" until it is
+// cleared (test_wrap_boundary): the LOG thread then reads no queue.
+static std::atomic<bool> park_on_marker{false};
+static std::atomic<bool> parked{false};
+
 struct Capture : Logger {
 	std::mutex m;
 	std::vector<std::string> lines;
 	void log(int, std::string_view sv, bool, bool) override {
+		if (park_on_marker.load(std::memory_order_acquire) && sv == "bnd block") {
+			parked.store(true, std::memory_order_release);
+			while (park_on_marker.load(std::memory_order_acquire)) {
+				std::this_thread::yield();
+			}
+			parked.store(false, std::memory_order_release);
+			return;
+		}
 		std::lock_guard<std::mutex> l(m);
 		lines.emplace_back(sv);
 	}
@@ -243,6 +260,7 @@ struct LogFromDestructor {
 };
 
 static void test_short_lived_threads(int rounds, int threads, int per) {
+	const auto queues_before = logger_detail::queue_count();   // earlier tests made some
 	install();
 	tls_dtor_lines = 0;
 	long expected = 0;
@@ -290,8 +308,8 @@ static void test_short_lived_threads(int rounds, int threads, int per) {
 	CHECK(dtor == tls_dtor_lines.load());
 	// A queue whose thread ended is taken by a later thread once the LOG thread has drained it, so the
 	// queues number about the threads alive at once, not the threads that ever logged.
-	const auto queues = logger_detail::queue_count();
-	std::printf("queue short-lived threads OK: %d threads logged %ld lines (%ld from thread-local destructors) through %zu queues\n",
+	const auto queues = logger_detail::queue_count() - queues_before;
+	std::printf("queue short-lived threads OK: %d threads logged %ld lines (%ld from thread-local destructors), %zu new queues\n",
 		rounds * threads, expected, dtor, queues);
 	CHECK(queues < static_cast<size_t>(rounds * threads) / 4);
 	capture->lines.clear();
@@ -323,6 +341,117 @@ static void test_wrap_every_offset(int per) {
 		CHECK(line == "wrap t0:" + std::to_string(k) + " " + filler.substr(0, size[static_cast<size_t>(k)]));
 	}
 	std::printf("queue wrap OK: %d lines of every size class, each whole\n", per);
+	capture->lines.clear();
+}
+
+// The wrap boundary, exactly. A thread's queue is emptied with its read index (as published to the
+// producer) P bytes into its buffer; the LOG thread is parked in the handler on another thread's line,
+// so it reads nothing more; the thread fills its buffer to T bytes short of the end (T from 0 to 72,
+// across a line header) and logs one more line whose record is `need` bytes, for every size from
+// P - 16 to P + T + 16. The room left is P + T, and the line does not fit in the T at the end: it
+// wraps to the start only if the padding and the line both fit (need <= P), and otherwise the queue
+// moves to a bigger buffer. A wrap with room for the line alone (P < need <= P + T) would write it
+// over the thread's unread lines at P. Each case's thread stays alive to the end, so every case
+// starts with a queue of its own (none recycled). Every line must come out whole, in order.
+static void test_wrap_boundary() {
+	install();
+	constexpr std::size_t H = sizeof(logger_detail::LineRecord);
+	constexpr std::size_t P = 512;
+	constexpr std::size_t kMin = (H + 32 + 7) & ~std::size_t{7};   // the smallest line this test logs
+	std::atomic<bool> finished{false};
+	std::atomic<int> grew_count{0}, wrapped_count{0};
+	std::vector<std::thread> keep;
+	int c = 0;
+	for (std::size_t T = 0; T <= 72; T += 8) {
+		for (std::size_t need = P - 16; need <= P + T + 16; need += 8, ++c) {
+			std::atomic<bool> done{false};
+			keep.emplace_back([&, T, need, c] {
+				int n = 0;
+				std::vector<std::string> expect;
+				// A line whose record is exactly `size` bytes (a multiple of 8, at least kMin). The double
+				// argument keeps it off the fast formatter (which asks for room in steps of its own): it is
+				// formatted by std::vformat, then copied in with a request for exactly the record's room.
+				auto put = [&](std::size_t size) {
+					std::string msg = "bnd c" + std::to_string(c) + " n" + std::to_string(n++) + " ";
+					msg.resize(size - H - 1, 'r');
+					L_INFO("{}{:.0f}", msg, 0.0);
+					expect.push_back(msg + "0");
+				};
+				auto off = [] { return logger_detail::thread_state.ring->w & logger_detail::thread_state.ring->mask; };
+				// Lines from the write offset to offset `to` exactly (`to` up to the buffer's end), each in
+				// place; `to` is at least kMin past the write offset.
+				auto fill_to = [&](std::size_t to) {
+					for (;;) {
+						const std::size_t d = to - off();
+						const std::size_t size = d <= 2048 ? d : (d - 2048 >= kMin ? 2048 : d - kMin);
+						const auto before = logger_detail::thread_state.ring->w;
+						put(size);
+						CHECK(logger_detail::thread_state.ring->w - before == size);
+						if (size == d) {
+							return;
+						}
+					}
+				};
+				put(kMin);   // attaches the queue
+				CHECK(drain(10s));
+				const std::size_t cap = logger_detail::thread_state.ring->mask + 1;
+				if (off() > P || (off() < P && P - off() < kMin)) {
+					// Around the end to the start: in place to the end, or one line that wraps.
+					if (cap - off() >= kMin) {
+						fill_to(cap);
+					} else {
+						put(kMin);
+					}
+					CHECK(drain(10s));
+				}
+				if (off() != P) {
+					fill_to(P);
+					CHECK(drain(10s));   // empty: the read index published to the producer is P
+				}
+				CHECK(off() == P && logger_detail::thread_state.ring->mask + 1 == cap);
+				// Park the LOG thread on another thread's line, then fill to T short of the end.
+				park_on_marker.store(true);
+				std::thread([] { L_INFO("bnd block"); }).join();
+				for (int i = 0; i < 10000 && !parked.load(std::memory_order_acquire); ++i) {
+					std::this_thread::sleep_for(1ms);
+				}
+				CHECK(parked.load());
+				fill_to(cap - T);
+				CHECK(off() == (cap - T) % cap);
+				put(need);
+				const bool grew = logger_detail::thread_state.ring->mask + 1 != cap;
+				park_on_marker.store(false);
+				CHECK(grew == (need > P));   // wrapped (or in place) only with room for the padding and the line
+				(grew ? grew_count : wrapped_count).fetch_add(1);
+				CHECK(drain(10s));
+				{
+					std::lock_guard<std::mutex> l(capture->m);
+					std::vector<std::string> got;
+					const std::string prefix = "bnd c" + std::to_string(c) + " ";
+					for (auto& line : capture->lines) {
+						if (line.rfind(prefix, 0) == 0) {
+							got.push_back(line);
+						}
+					}
+					CHECK(got == expect);
+				}
+				done.store(true);
+				while (!finished.load()) {
+					std::this_thread::sleep_for(1ms);
+				}
+			});
+			while (!done.load()) {
+				std::this_thread::sleep_for(100us);
+			}
+		}
+	}
+	finished.store(true);
+	for (auto& th : keep) {
+		th.join();
+	}
+	std::printf("queue wrap boundary OK: %d lines at 0 to 72 bytes from the end with P + T bytes free, %d moved to a "
+		"bigger buffer, %d wrapped, each whole\n", c, grew_count.load(), wrapped_count.load());
+	std::lock_guard<std::mutex> l(capture->m);
 	capture->lines.clear();
 }
 
@@ -686,6 +815,7 @@ int main(int argc, char** argv) {
 	}
 	if (argc == 2 && std::strcmp(argv[1], "wrap") == 0) {
 		test_wrap_every_offset(40000);   // alone: the revert checks of the wrap
+		test_wrap_boundary();
 		test_wrap_full(4000);
 		return 0;
 	}
@@ -693,6 +823,7 @@ int main(int argc, char** argv) {
 	// within the test's timeout; they still wrap every queue and race every round.
 	const bool quick = kThreadSanitizer || (argc == 2 && std::strcmp(argv[1], "quick") == 0);
 	test_wrap_every_offset(quick ? 20000 : 40000);
+	test_wrap_boundary();
 	test_wrap_full(quick ? 2000 : 4000);
 	for (int threads : {1, 2, 4, 8, 16}) {
 		test_exactly_once(threads, quick ? 2000 : 20000);

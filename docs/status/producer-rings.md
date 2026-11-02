@@ -41,10 +41,10 @@ the A/A noise (latency).
   ... std::source_location::source_location`.
 - Mutants (TSan on the VM, `vmmut.sh`): the publish store relaxed: data race in `logger_queue` and
   `logger_wake`; the wake removed from `ring_published`: `logger_queue` hangs (timeout) and
-  `logger_wake` fails (`done_ns.load() != 0`); the wrap written as a whole header: ASan above. The
-  wrap condition weakened to `free >= need` is not caught: the producer's view of the free room
-  lags the LOG thread's (it publishes its read index once per pass), and `test_wrap_full`, which
-  keeps the buffer within a line of full, passes with it (open).
+  `logger_wake` fails (`done_ns.load() != 0`); the wrap written as a whole header: ASan above; the
+  wrap condition weakened to `free >= need`: `test_wrap_boundary` fails (`grew == (need > P)`, 45 of
+  its 95 cases) under ASan on the M1 Pro and TSan and plain on the VM, and passes on main.
+  (`test_wrap_full` alone missed it: the producer's view of the free room lags the LOG thread's.)
 - v2: main's due rules kept (a line due within a tick is due 1 ms after its call unless it starts a
   burst with nothing pending); the LOG thread sleeps until the earliest due line (no naps), and a
   producer wakes it only if its line is due earlier; routine-line handles keep `unlog()` (the swap is
@@ -80,7 +80,6 @@ At 0a79b95 (the landed code; the landed commit adds docs only):
    `rdtsc` is 6, but its conversion to steady time is not exact), and the rest is the producer's
    stores missing the cache while the LOG thread (535 ns a line there) falls behind and the queue
    grows. Smaller line headers, a faster LOG thread, or rdtsc stamps with a gate in raw ticks.
-2. A test that catches the weakened wrap condition.
 
 ## Blocked on
 
