@@ -93,6 +93,13 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(logger_wake_test PRIVATE logger)
   add_test(NAME logger_wake COMMAND logger_wake_test)
 
+  # The per-thread queues: exactly once and in order from 4 to 16 producers, order between threads,
+  # the sleep handshake, threads that end, exit without finish(), finish() racing 16 producers.
+  add_executable(logger_queue_test test/queue.cc)
+  target_link_libraries(logger_queue_test PRIVATE logger)
+  add_test(NAME logger_queue COMMAND logger_queue_test)
+  set_tests_properties(logger_queue PROPERTIES TIMEOUT 600)
+
   # Differential test: one scripted run, built against the library and against the frozen copy
   # of the implementation before the producer path changed (test/frozen), must write identical bytes.
   # The frozen copy publishes `Logging::config` to the LOG thread with relaxed counters, so the
@@ -113,8 +120,11 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   endif()
 endif()
 
-# Producer-cost benchmark (opt-in): fetches fmt for the synchronous comparator only.
+# Producer-cost benchmark (opt-in): fetches fmt for the synchronous comparator, and with
+# LOGGER_BENCH_QUILL the asynchronous comparator quill, at a release tag.
+# Nothing here is a dependency of the library.
 option(LOGGER_BUILD_BENCH "Build bench/lg.cc" OFF)
+option(LOGGER_BENCH_QUILL "Time quill in bench/lg.cc (fetched)" OFF)
 if(LOGGER_BUILD_BENCH AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   FetchContent_Declare(fmt
     GIT_REPOSITORY https://github.com/fmtlib/fmt.git
@@ -122,9 +132,20 @@ if(LOGGER_BUILD_BENCH AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   FetchContent_MakeAvailable(fmt)
   add_executable(logger_bench bench/lg.cc)
   target_link_libraries(logger_bench PRIVATE logger fmt::fmt)
+  if(LOGGER_BENCH_QUILL)
+    FetchContent_Declare(quill
+      GIT_REPOSITORY https://github.com/odygrd/quill.git
+      GIT_TAG        v13.1.0
+      GIT_SHALLOW    TRUE)
+    FetchContent_MakeAvailable(quill)
+    target_link_libraries(logger_bench PRIVATE quill::quill)
+    target_compile_definitions(logger_bench PRIVATE LOGGER_BENCH_QUILL)
+  endif()
+  add_test(NAME logger_bench_check COMMAND logger_bench --check)
   # Where a producer's time goes (each piece alone), a profiling loop, the LOG thread's drain over time,
   # and one isolated line's latency.
   add_executable(logger_parts bench/parts.cc)
+  target_compile_features(logger_parts PRIVATE cxx_std_20)   # it links nothing that would request it
   add_executable(logger_steady bench/steady.cc)
   target_link_libraries(logger_steady PRIVATE logger)
   add_executable(logger_drain bench/drain.cc)

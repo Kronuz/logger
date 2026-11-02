@@ -7,19 +7,18 @@ Part of [Kronuz C++ Libraries](https://github.com/Kronuz/cpp-libraries), a colle
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 
 Lock-free, deferred logger for C++20: one thread writes the lines in order, and delayed lines log only slow operations.
-Many threads hand their lines to that LOG thread with one compare-exchange each,
-and a "this is taking too long" line waits in the [stash](https://github.com/Kronuz/stash)
-timer wheel until it is due or cancelled with one atomic, so a fast operation
-logs nothing. Reach for it in
-servers that log from many threads on hot paths.
+Each thread formats its lines into its own queue, with no lock and no allocation,
+and a "this is taking too long" line waits until it is due or is cancelled with
+one atomic, so a fast operation logs nothing. Reach for it in servers that log
+from many threads on hot paths.
 
 ![logger: the demo's colored output, one marker per severity](docs/logger.svg)
 
 ## ✨ Highlights
 
-- **Producers hand lines off.** A routine line reaches the LOG thread with one
-  compare-exchange onto the scheduler's lock-free stack; lines more severe than
-  `LOG_ERR` are written at the call.
+- **Producers hand lines off.** A routine line is formatted into the thread's own
+  queue and published with one store, with no lock, allocation or read-modify-write;
+  lines more severe than `LOG_ERR` are written at the call.
 - **Log slow operations only.** `L_DELAYED_200("request {} is slow", id)` prints
   only if it is not cleared within 200 ms, annotated with how long it ran.
 - **`std::format` messages**, and no argument is evaluated below the log level.
@@ -109,61 +108,70 @@ Not for:
 - **Crash-proof routine lines.** A routine line logged while nothing is pending
   is written at once, but one logged while lines are pending waits for the next
   1 ms batch, so a hard crash within that millisecond loses it; `Logging::finish()`
-  drains the wheel before exit.
+  drains the queues before exit.
 - **One order across severities.** Lines more severe than `LOG_ERR`, and lines
   due at once that are logged after `Logging::finish()` begins, are written at
   the call and can come out ahead of routine lines logged before them. Routine
   lines whose logging is ordered (one thread's calls, or one call finishing
-  before another begins) come out in that order; lines of unrelated threads can
-  leave due order by the microseconds between a thread's clock read and its push.
+  before another begins) come out in that order; lines of two threads stamped
+  within one tick of the stamp clock (41.67 ns on Apple silicon) can come out in
+  either order.
 
 ## ⚡ Performance
 
-`bench/lg.cc` times what a producer thread pays for one `L_INFO("value {} and {}", i, "x")`,
-in nanoseconds per call; each cell is the range over two runs, each the median of five rounds.
-*LOG thread idle* times bursts of 1,000 calls on each producer while the LOG thread has nothing
-to write (it drains between bursts), so it is a producer's own time per call. *LOG thread
-draining* times calls back to back while the LOG thread stamps and writes them, as wall time
-divided by all calls, so with four producers it is their combined rate. Both format the message
-on the calling thread. The comparator, *fmt + mutex*, is a plain synchronous logger timed the
-same way as the draining column: the caller formats the same message with
-[fmt](https://github.com/fmtlib/fmt) 10.2.1 into a buffer and counts its bytes under a
-`std::mutex`, with no timestamp and no I/O. Both produce the same text (a check over the
-bench's 300,000 messages found no difference); the logger's sink also receives the timestamp.
+`bench/lg.cc` times what a producer thread pays for one `L_INFO("value {} and {}", i, "x")`, in
+nanoseconds per call, the median of five rounds; each cell is the range over the runs of one
+`quiet strict` hold per machine. *Burst* times batches of 1,000 calls on each producer with 5 ms pauses between them, in which an
+asynchronous logger's consumer writes the batch, so it is a producer's own time per call; the
+producer spins through the pause, since a sleeping one would time the core's clock ramp. *Back to
+back* times calls back to back while the consumer writes them, as wall time divided by all calls,
+so with four producers it is their combined rate. `L_INFO` is this library. [quill](https://github.com/odygrd/quill)
+v13.1.0 is an asynchronous logger whose caller copies the arguments into a per-thread queue and
+whose backend thread formats them; *fmt + mutex* is a synchronous logger whose caller formats the
+message with [fmt](https://github.com/fmtlib/fmt) 10.2.1 into a buffer and counts its bytes under a
+`std::mutex`, with no timestamp and no I/O. All three sinks receive the same text (`logger_bench
+--check`: 100,000 messages each, none different); the logger's sink also receives the timestamp,
+which its LOG thread formats.
 
-| Producers, machine | `L_INFO`, LOG thread idle | `L_INFO`, LOG thread draining | fmt + mutex |
-|---|---:|---:|---:|
-| 1, Apple M4 Pro | 65 | 58 to 65 | 27 |
-| 4, Apple M4 Pro | 135 to 139 | 135 to 146 | 86 to 89 |
-| 1, Intel Core i9-9980HK | 398 to 401 | 228 to 229 | 60 to 61 |
-| 4, Intel Core i9-9980HK | 360 to 383 | 78 to 81 | 179 |
+| Producers, row | M4 Pro: `L_INFO` | quill | fmt + mutex | i9-9980HK: `L_INFO` | quill | fmt + mutex |
+|---|---:|---:|---:|---:|---:|---:|
+| 1, burst | 22.7 | 6.5 to 7.0 | 27.8 to 28.8 | 59.3 to 60.1 | 27.4 to 30.5 | 62.5 to 67.7 |
+| 1, back to back | 21.0 to 21.8 | 8.6 to 9.1 | 28.2 to 29.0 | 82.2 to 83.6 | 57.8 to 66.1 | 61.2 to 62.8 |
+| 4, burst | 21.7 to 22.1 | 6.5 to 6.8 | 41.5 to 49.2 | 65.5 to 67.1 | 35.1 to 37.8 | 137.0 to 152.7 |
+| 4, back to back | 6.0 to 6.1 | 5.4 to 7.4 | 79.7 to 84.8 | 23.4 to 24.0 | 25.9 to 28.1 | 171.2 to 173.1 |
 
-A synchronous call is cheaper on one thread on both machines and on four threads on the M4
-Pro; on the i9 four producers sharing one mutex pay more than four handing lines to the LOG
-thread.
+One `L_INFO` producer pays less than fmt + mutex on the M4 Pro in both rows and on the i9 in
+bursts, and more on the i9 back to back (83 against 62 ns): there its LOG thread writes a line in
+about 535 ns, so the queue grows to hold the backlog and the producer's stores miss the cache, and
+the stamp clock alone (`mach_continuous_time`) costs 20 ns. Four producers pay a half to a
+thirteenth of what they pay under one mutex. quill's producer is two to three and a half times cheaper in
+bursts and about even with four producers back to back, because its caller copies the arguments
+and its backend thread formats them, where `L_INFO` formats on the calling thread; its backend
+writes a line in about 365 ns on the M4 Pro and 620 on the i9, against 270 and 535 for the LOG
+thread (*end-to-end* in `logger_bench`).
 
 `bench/latency.cc` times one isolated `L_INFO` (300 of them, 5 ms apart, so nothing is pending
-when each is logged) from the call until the handler runs, in microseconds. Such a line is
-written at once; a line logged while others are pending waits for the next 1 ms batch instead.
+when each is logged) from the call until the handler runs, in microseconds. Such a line is written
+at once; a line logged while others are pending waits for the next 1 ms batch instead.
 
 | Machine | median | 90th percentile |
 |---|---:|---:|
-| Apple M4 Pro | 17 | 46 |
-| Intel Core i9-9980HK | 43 | 81 |
+| Apple M4 Pro | 13.7 | 29 to 39 |
+| Intel Core i9-9980HK | 40 | 72 to 73 |
 
-Apple M4 Pro (arm64), macOS 26.7.2, and Intel Core i9-9980HK (x86_64), macOS 15.8.1, both
-with Apple clang 17.0.0 and `-O3 -DNDEBUG`; the producer table at `1f856e9`, the latency table
-at the commit that added `bench/latency.cc`:
+Apple M4 Pro (arm64), macOS 26.7.2, and Intel Core i9-9980HK (x86_64), macOS 15.8.1, both with
+Apple clang 17.0.0 and `-O3 -DNDEBUG`, at the commit that added the per-thread queues:
 
 ```sh
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DLOGGER_BUILD_BENCH=ON
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DLOGGER_BUILD_BENCH=ON -DLOGGER_BENCH_QUILL=ON
 cmake --build build --target logger_bench logger_latency
-./build/logger_bench
+./build/logger_bench --check && ./build/logger_bench
 ./build/logger_latency
 ```
 
 [ARCHITECTURE.md](ARCHITECTURE.md#what-one-call-costs) breaks one call down into its pieces;
-`bench/parts.cc` times each piece alone, and `bench/steady.cc` is a profiling loop.
+`bench/parts.cc` times each piece alone, `bench/drain.cc` the LOG thread's drain, and
+`bench/steady.cc` is a profiling loop.
 
 ## 📚 Documentation
 
@@ -187,7 +195,8 @@ ctest --test-dir build
 
 `./build/logger_demo` runs the demo. Add `-DLOGGER_BUILD_BENCH=ON` to build
 `logger_bench`, `logger_parts`, `logger_steady`, `logger_drain`, and `logger_latency`; it fetches
-fmt for the comparator.
+fmt for the synchronous comparator, and `-DLOGGER_BENCH_QUILL=ON` fetches quill for the
+asynchronous one.
 
 ## 🤝 Contributing
 

@@ -5,6 +5,68 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Upgrading a pin from before 2026-10-30: [the consumer upgrade note](https://github.com/Kronuz/cpp-libraries/blob/main/docs/UPGRADING-2026-10.md#logger) lists what changes for callers, how to find affected inputs, the commits not to pin, and the speedup.
 
+## 2026-11-01 (per-thread queues)
+
+### Changed
+
+- A routine line costs its thread no lock, no allocation and no read-modify-write. Each thread
+  that logs owns a queue, a byte ring it formats its lines into and publishes with one store; the
+  LOG thread is its own loop that merges the queues in call order (by due time, then call time,
+  taking only lines stamped before each pass began) and keeps deferred lines in a heap. Before,
+  each line was a `Logging` record allocated by the caller and posted to the scheduler's wheel
+  with a compare-exchange, and the scheduler's thread wrote it. The stamp is one raw read of the
+  stamp clock (`mach_continuous_time` on macOS), converted on the LOG thread. The due rules are
+  unchanged (a line due within a tick is due 1 ms after its call unless it starts a burst with
+  nothing pending), as are `L_DELAYED_*`, `clear()`/`unlog()`, `max_pending` and its summary line,
+  `finish()` and the exit flush. A routine line's handle keeps its stamp and call site, so
+  `unlog()` on it still writes the swap after the line when the handle drops; `clear()` on it
+  returns false, as it does for a line already written. Lines of two threads stamped within one
+  tick of the stamp clock (41.67 ns on Apple silicon) can come out in either order.
+  Measured in one `quiet strict` hold per machine with `tools/ab_compare.py` (5 rounds, A/A on the
+  first side), START (`ce27b90`) and main (`a82454b`) against this commit, ns per call (latency in
+  us), the median of the runs, and the ratio (A/A):
+
+  | Row | M4 Pro START | main | now | main / now (A/A) | i9 START | main | now | main / now (A/A) |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|
+  | burst, 1 producer | 254.2 | 53.3 | 22.7 | 2.34x (0.99) | 636.3 | 184.2 | 59.3 | 3.06x (0.99) |
+  | back to back, 1 producer | 225.4 | 49.0 | 21.0 | 2.31x (0.97) | 590.7 | 199.9 | 83.6 | 2.39x (1.00) |
+  | end-to-end, 1 producer | 624.8 | 318.2 | 271.2 | 1.14x (1.02) | 1477.4 | 652.8 | 541.4 | 1.23x (1.00) |
+  | burst, 4 producers | 439.2 | 123.5 | 22.1 | 5.69x (0.99) | 731.8 | 246.7 | 65.5 | 3.65x (1.02) |
+  | back to back, 4 producers | 181.7 | 140.4 | 6.10 | 22.7x (0.99) | 198.3 | 75.1 | 23.4 | 3.20x (0.98) |
+  | end-to-end, 4 producers | 652.8 | 327.5 | 256.7 | 1.28x (0.99) | 1501.6 | 714.9 | 512.8 | 1.39x (1.00) |
+  | `bench/drain.cc` produced | 261.7 | 62.3 | 22.9 | 2.77x (0.98) | 647.8 | 237.2 | 85.5 | 2.77x (1.01) |
+  | `bench/drain.cc` drained | 709.3 | 391.8 | 288.1 | 1.36x (1.03) | 1503.8 | 642.2 | 526.5 | 1.24x (1.03) |
+  | latency median (us) | 18.4 | 14.1 | 13.7 | noise (1.15) | 62.7 | 46.5 | 40.4 | noise (0.94) |
+  | latency p90 (us) | 40.6 | 38.3 | 38.5 | noise (1.00) | 99.0 | 80.4 | 71.6 | noise (0.84) |
+
+  The rows are `bench/lg.cc` as it is now (its pauses spin, and fmt + mutex runs through the same
+  harness), built against each side. Against START, every row is faster on both machines
+  (one producer in bursts 11.3x on the M4 Pro and 10.6x on the i9-9980HK, end-to-end 2.3x and
+  2.8x, latency median 1.35x and 1.55x). Against main every row is faster, or within the A/A noise
+  (the latency rows). Against fmt + mutex in the same holds, one producer pays less on the M4 Pro
+  in both rows (22.7 against 28 ns in bursts) and on the i9 in bursts (59 against 62 to 68 ns), and
+  more on the i9 back to back (83 against 61 to 63 ns, logger#1); four producers pay a half to a
+  thirteenth.
+
+### Fixed
+
+- The queues' first version corrupted the heap: the wrap at the end of a buffer was written as a
+  whole line header (`new (p) LineRecord`), and `LineRecord`'s `std::source_location` member's
+  constructor wrote past the bytes left. The wrap is an 8-byte record head now.
+
+### Added
+
+- `test/queue.cc` (`logger_queue`): the queues under 1 to 16 producers; the wrap at every offset
+  short of a header (`logger_queue_test wrap`; under ASan the old wrap reports a heap-buffer-overflow),
+  exactly once and in order, order across threads and by due time with records due 0 to 3.5 ms out,
+  watchdogs armed and dropped from 16 threads, backpressure, swaps, the sleep handshake,
+  short-lived threads, exit without `finish()`, and `finish()` racing 16 producers.
+- `bench/lg.cc`: quill v13.1.0 as a comparator (`-DLOGGER_BENCH_QUILL=ON`, fetched by the bench
+  only), a same-text check over every logger (`logger_bench --check`, the `logger_bench_check`
+  test), and fmt + mutex through the same burst and back-to-back harness. The pauses between
+  bursts spin: a sleeping pause timed the core's clock ramp, five times the cost for fmt + mutex
+  too on an M1 Pro.
+
 ## 2026-11-01 (isolated lines)
 
 ### Changed

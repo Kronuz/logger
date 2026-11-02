@@ -37,3 +37,9 @@ unless `LOGGER_DEBUG`). A line below the level evaluates none of its arguments.
 Returned by the deferred macros. `clear()` cancels the pending line; `unlog()`
 swaps its message; `age()` reports how long it lived. Dropping the handle runs
 the cancel/swap.
+
+A routine line (an async macro with no delay, such as `L_INFO`) is queued as it
+is logged and cannot be cancelled: its handle's `unlog()` swaps in a message that
+is written after the line when the handle drops, `clear()` drops that swap and
+returns false (as it does for a deferred line that has already fired), `age()`
+returns 0 and `release()` returns null.

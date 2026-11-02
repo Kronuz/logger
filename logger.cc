@@ -38,6 +38,8 @@
 #include <exception>       // for std::rethrow_exception
 #include <fcntl.h>         // for open, O_WRONLY, O_CREAT, O_APPEND
 #include <functional>      // for std::hash
+#include <algorithm>       // for std::push_heap, std::pop_heap, std::make_heap
+#include <condition_variable>   // for std::condition_variable
 #include <limits>          // for std::numeric_limits
 #include <mutex>           // for std::mutex, std::lock_guard
 #include <sstream>         // for std::ostringstream
@@ -55,31 +57,8 @@ using namespace std::chrono_literals;
 LogConfig Logging::config;
 LogHooks Logging::hooks;
 std::vector<std::unique_ptr<Logger>> Logging::handlers;
-Logging::Counter Logging::posted_[logger_detail::kStripes];
 Logging::Counter Logging::completed_;
 Logging::Counter Logging::dropped_;
-
-
-// This thread's state, created on first use: threads take counter stripes in turn, so producers
-// share a cache line of the lines-posted counters only when there are more of them than stripes.
-logger_detail::ThreadState&
-logger_detail::thread_state() noexcept
-{
-	static thread_local ThreadState state = [] {
-		static std::atomic<unsigned> next{0};
-		ThreadState s;
-		s.id = std::this_thread::get_id();
-		s.stripe = next.fetch_add(1, std::memory_order_relaxed) % kStripes;
-		return s;
-	}();
-	return state;
-}
-
-Logging::Counter&
-Logging::stripe() noexcept
-{
-	return posted_[logger_detail::thread_state().stripe];
-}
 
 
 namespace {
@@ -147,6 +126,7 @@ namespace {
 struct MachClock {
 	std::uint32_t numer = 1, denom = 1;
 	bool usable = false;
+	std::int64_t delta = 0;   // steady_clock less this clock, when they do not agree (usable is false)
 	MachClock() {
 		mach_timebase_info_data_t tb;
 		if (mach_timebase_info(&tb) != KERN_SUCCESS || tb.numer == 0 || tb.denom == 0) {
@@ -161,12 +141,22 @@ struct MachClock {
 		auto lo = std::chrono::duration_cast<std::chrono::nanoseconds>(before.time_since_epoch()).count() - 1'000'000;
 		auto hi = std::chrono::duration_cast<std::chrono::nanoseconds>(after.time_since_epoch()).count() + 1'000'000;
 		usable = static_cast<std::int64_t>(mine) >= lo && static_cast<std::int64_t>(mine) <= hi;
+		if (!usable) {
+			delta = (lo + hi) / 2 - static_cast<std::int64_t>(mine);
+		}
+	}
+	std::uint64_t ns(std::uint64_t ticks) const noexcept {
+		return ticks * numer / denom;
 	}
 	std::uint64_t now_ns() const noexcept {
-		return mach_continuous_time() * numer / denom;
+		return ns(mach_continuous_time());
 	}
 };
-const MachClock mach_clock;
+// Made on first use, so a line logged while another file's statics are initialized finds it.
+const MachClock& mach_clock() {
+	static const MachClock clock;
+	return clock;
+}
 #endif
 }  // namespace
 
@@ -174,11 +164,25 @@ std::chrono::steady_clock::time_point
 logger_detail::steady_now() noexcept
 {
 #if defined(__APPLE__)
-	if (mach_clock.usable) {
-		return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(static_cast<std::int64_t>(mach_clock.now_ns())));
+	if (const auto& c = mach_clock(); c.usable) {
+		return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(static_cast<std::int64_t>(c.now_ns())));
 	}
 #endif
 	return std::chrono::steady_clock::now();
+}
+
+// A stamp as a steady_clock reading. On macOS a stamp counts mach_continuous_time, the clock behind
+// steady_clock, so the conversion is the one steady_clock makes; were they ever to disagree (checked
+// at first use), the offset measured then is added.
+std::chrono::steady_clock::time_point
+logger_detail::stamp_time(std::uint64_t stamp) noexcept
+{
+#if defined(__APPLE__)
+	const auto& c = mach_clock();
+	return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(static_cast<std::int64_t>(c.ns(stamp)) + c.delta));
+#else
+	return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(static_cast<std::int64_t>(stamp)));
+#endif
 }
 
 namespace {
@@ -211,7 +215,8 @@ logger_detail::system_at(std::chrono::steady_clock::time_point now)
 		const std::int64_t mid = b + (a - b) / 2;
 		clock_offset.offset.store(w - mid, std::memory_order_relaxed);
 		clock_offset.at.store(mid, std::memory_order_relaxed);
-		return wall;
+		// The reading may be older than this measurement (the LOG thread converts a queued line's stamp).
+		return system_clock::time_point(duration_cast<system_clock::duration>(nanoseconds(n + (w - mid))));
 	}
 	return system_clock::time_point(duration_cast<system_clock::duration>(
 		nanoseconds(n + clock_offset.offset.load(std::memory_order_relaxed))));
@@ -225,7 +230,7 @@ logger_detail::system_at(std::chrono::steady_clock::time_point now)
 int&
 log_indent() noexcept
 {
-	return logger_detail::thread_state().indent;
+	return logger_detail::thread_state.indent;
 }
 
 
@@ -693,9 +698,689 @@ SysLog::log(int priority, std::string_view str, bool with_priority, bool /*with_
 }
 
 
+// --- The per-thread queues and the LOG thread ------------------------------
+//
+// Each thread that logs owns a queue: a byte ring it writes records into (a routine line's message
+// in place, or a reference to a full record) and publishes with one store of its write index. The
+// LOG thread reads every queue, files deferred lines into a heap by due time, and writes the lines
+// in the order of their calls: it merges the queues by the clock reading each line was stamped with,
+// and only lines stamped before it began a look, so a line is never written ahead of one that was
+// logged before it and was not yet visible. See ARCHITECTURE.md.
+
+namespace logger_detail {
+
+// What a written line consists of, from a full record or from a queued one.
+struct Emit {
+	int priority;
+	bool info;
+	bool async;
+	std::uint64_t once;
+	std::string_view str;
+	const std::exception_ptr* eptr;   // null: no exception
+	std::thread::id thread_id;
+	std::source_location loc;
+	int indent;
+	std::chrono::system_clock::time_point timestamp;
+	std::chrono::nanoseconds age;     // for the " ~N" annotation of an async line
+};
+
+// A queued full record: a reference the queue holds. A line due within a tick of its call (`ordered`)
+// is written in queue order at its due time; any other (a deferred line) is filed by due time.
+struct TaskRecord {
+	std::uint32_t size;      // sizeof(TaskRecord)
+	std::uint8_t kind;       // kRecTask
+	std::uint8_t ordered;
+	std::uint8_t pad_[2];
+	std::int64_t due;        // steady_clock nanoseconds
+	std::int64_t created;    // steady_clock nanoseconds
+	std::shared_ptr<Logging> task;
+};
+static_assert(sizeof(TaskRecord) % 8 == 0, "records are 8-byte aligned");
+
+// The size and kind every record starts with.
+static void record_head(const char* p, std::uint32_t& size, std::uint8_t& kind) noexcept {
+	RecordHead h;
+	std::memcpy(&h, p, sizeof(h));
+	size = h.size;
+	kind = h.kind;
+}
+
+// Pads from `p` to the end of the buffer, `size` bytes (at least 8): only the record head is written,
+// whatever the room, never a whole record header.
+static void write_wrap(char* p, std::uint64_t size) noexcept {
+	RecordHead h{static_cast<std::uint32_t>(size), kRecWrap, {}};
+	std::memcpy(p, &h, sizeof(h));
+}
+
+static std::int64_t steady_ns(std::chrono::steady_clock::time_point t) noexcept {
+	return std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
+}
+
+constexpr std::int64_t kTickNs = 1'000'000;   // the batching tick, kCoalesce
+
+// A queued line's due time and call time, in steady_clock nanoseconds.
+static void line_key(const LineRecord* l, std::int64_t& due, std::int64_t& created) noexcept {
+	created = steady_ns(stamp_time(l->stamp));
+	due = (l->flags & kLineAtOnce) != 0 ? created : created + kTickNs;
+}
+
+// One tick in stamp units, rounded up.
+static std::uint64_t tick_stamps() noexcept {
+#if defined(__APPLE__)
+	static const std::uint64_t tick = [] {
+		mach_timebase_info_data_t tb;
+		if (mach_timebase_info(&tb) != KERN_SUCCESS || tb.numer == 0) {
+			return std::uint64_t{1'000'000};
+		}
+		return (std::uint64_t{1'000'000} * tb.denom + tb.numer - 1) / tb.numer;
+	}();
+	return tick;
+#else
+	return 1'000'000;
+#endif
+}
+
+// One buffer of a queue. The producer publishes its write index, the LOG thread its read index, each
+// on its own cache line. `next` is the bigger buffer the producer moved to when this one filled up; it
+// is set after the last write index published here.
+struct RingBuf {
+	alignas(kCacheLine) std::atomic<std::uint64_t> pub_w{0};
+	alignas(kCacheLine) std::atomic<std::uint64_t> pub_r{0};
+	std::atomic<RingBuf*> next{nullptr};
+	std::uint64_t cap = 0;
+	char* data = nullptr;
+
+	static RingBuf* make(std::uint64_t cap) noexcept {
+		auto* b = new (std::nothrow) RingBuf;
+		if (b == nullptr) {
+			return nullptr;
+		}
+		b->data = static_cast<char*>(::operator new(cap, std::align_val_t{64}, std::nothrow));
+		if (b->data == nullptr) {
+			delete b;
+			return nullptr;
+		}
+		b->cap = cap;
+		return b;
+	}
+	~RingBuf() {
+		::operator delete(data, std::align_val_t{64});
+	}
+};
+
+// Who a queue belongs to: a live thread, nobody since its thread ended (the LOG thread drains it, then
+// frees it), nobody (a thread that logs next takes it), or every thread already exiting (a lock guards it).
+enum : int { kOwned = 0, kOrphaned = 1, kFree = 2, kShared = 3 };
+constexpr std::uint64_t kRingStart = 16 * 1024;   // a queue's first buffer, in bytes; it doubles when full
+
+// A queue: the producer's half (what the thread-local block points to), then the LOG thread's.
+struct Ring : RingProducer {
+	RingBuf* wbuf = nullptr;                // the producer's buffer
+	alignas(kCacheLine) RingBuf* rbuf = nullptr;   // the LOG thread's buffer
+	std::uint64_t r = 0;                    // the LOG thread's read index in it
+	std::thread::id tid;                    // the owning thread, set before its first record
+	std::atomic<int> owner{kOwned};
+	Ring* next_ring = nullptr;              // the registry, newest first; a queue is never unlinked or freed
+};
+
+std::atomic<Ring*> ring_list{nullptr};
+std::mutex shared_ring_mutex;               // guards the producer's half of the shared queue
+Ring* shared_ring = nullptr;
+
+static Ring* new_ring(int owner) noexcept {
+	auto* g = new (std::nothrow) Ring;
+	if (g == nullptr) {
+		return nullptr;
+	}
+	RingBuf* b = RingBuf::make(kRingStart);
+	if (b == nullptr) {
+		delete g;
+		return nullptr;
+	}
+	g->wbuf = g->rbuf = b;
+	g->data = b->data;
+	g->mask = b->cap - 1;
+	g->room = b->cap;
+	g->pub_w = &b->pub_w;
+	g->owner.store(owner, std::memory_order_relaxed);
+	g->tid = std::this_thread::get_id();
+	// seq_cst: a sleeping LOG thread's look at the queues sees the queue, or its producer sees it sleeping.
+	Ring* head = ring_list.load(std::memory_order_relaxed);
+	do {
+		g->next_ring = head;
+	} while (!ring_list.compare_exchange_weak(head, g, std::memory_order_seq_cst, std::memory_order_relaxed));
+	return g;
+}
+
+// Releases the thread's queue when the thread ends: the LOG thread writes what is left in it and then
+// lets another thread take it. A line logged after this (by another thread-local's destructor) goes
+// through the shared queue.
+struct RingRelease {
+	~RingRelease() {
+		auto& ts = thread_state;
+		ts.dead = true;
+		if (auto* g = static_cast<Ring*>(ts.ring)) {
+			ts.ring = nullptr;
+			g->owner.store(kOrphaned, std::memory_order_release);
+		}
+	}
+};
+
+// The LOG thread.
+class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
+	struct Deferred {
+		std::int64_t due;
+		std::int64_t created;
+		std::uint64_t seq;
+		std::shared_ptr<Logging> task;
+	};
+	// A queue's next line: its key is (due, call time).
+	struct Head {
+		std::int64_t due;
+		std::int64_t created;
+		Ring* ring;
+	};
+	// Heap orders: the earliest first.
+	static bool later(const Head& a, const Head& b) noexcept {
+		return a.due != b.due ? a.due > b.due : a.created > b.created;
+	}
+	static bool later_deferred(const Deferred& a, const Deferred& b) noexcept {
+		if (a.due != b.due) {
+			return a.due > b.due;
+		}
+		return a.created != b.created ? a.created > b.created : a.seq > b.seq;
+	}
+
+	std::mutex mtx;
+	std::condition_variable cv;
+	std::atomic<int> ending{-1};             // finish()'s countdown of passes; -1 until it begins
+	std::atomic<bool> final_done{false};     // the last look at the queues is over
+	std::vector<Deferred> deferred;          // LOG thread only: deferred lines, a heap by due time
+	std::uint64_t filed = 0;                 // LOG thread only: deferred lines filed so far
+	std::vector<Head> heads;                 // LOG thread only: each queue's next line, during a pass
+	long written = 0;                        // LOG thread only: queued lines written this pass
+	std::int64_t next_due = std::numeric_limits<std::int64_t>::max();   // after a pass: the earliest line left
+
+	// Moves `g`'s read index to its next line written in queue order: past wrap records and spent
+	// buffers, filing the deferred tasks it meets. True with `h` set if there is one.
+	bool advance(Ring& g, Head& h) {
+		for (;;) {
+			RingBuf* b = g.rbuf;
+			if (g.r == b->pub_w.load(std::memory_order_acquire)) {
+				RingBuf* n = b->next.load(std::memory_order_acquire);
+				if (n == nullptr) {
+					return false;
+				}
+				if (g.r != b->pub_w.load(std::memory_order_acquire)) {
+					continue;   // the producer's last records here, published before it moved on
+				}
+				g.rbuf = n;
+				g.r = 0;
+				delete b;
+				continue;
+			}
+			char* p = b->data + (g.r & (b->cap - 1));
+			std::uint32_t size;
+			std::uint8_t kind;
+			record_head(p, size, kind);
+			if (kind == kRecWrap) {
+				g.r += size;
+				continue;
+			}
+			if (kind == kRecTask) {
+				auto* t = reinterpret_cast<TaskRecord*>(p);
+				if (t->ordered == 0) {
+					deferred.push_back({t->due, t->created, ++filed, std::move(t->task)});
+					std::push_heap(deferred.begin(), deferred.end(), later_deferred);
+					t->~TaskRecord();
+					g.r += size;
+					continue;
+				}
+				h = {t->due, t->created, &g};
+				return true;
+			}
+			std::int64_t due, created;
+			line_key(reinterpret_cast<const LineRecord*>(p), due, created);
+			h = {due, created, &g};
+			return true;
+		}
+	}
+
+	// Writes `g`'s next line (the one advance() found) and moves past it.
+	void fire_head(Ring& g) {
+		RingBuf* b = g.rbuf;
+		char* p = b->data + (g.r & (b->cap - 1));
+		std::uint32_t size;
+		std::uint8_t kind;
+		record_head(p, size, kind);
+		if (kind == kRecTask) {
+			auto* t = reinterpret_cast<TaskRecord*>(p);
+			std::shared_ptr<Logging> task = std::move(t->task);
+			t->~TaskRecord();
+			g.r += size;
+			fire(task);
+			return;
+		}
+		write_line(g, reinterpret_cast<const LineRecord*>(p));
+		g.r += size;
+		++written;
+	}
+
+	static void fire(std::shared_ptr<Logging>& task) {
+		if (*task && task->clear(true)) {
+			static_cast<Logging::Base&>(*task)();   // skips a task its handle cancelled meanwhile
+		}
+	}
+
+	static void write_line(const Ring& g, const LineRecord* l) {
+		Emit line{l->priority, (l->flags & kLineInfo) != 0, true, l->once,
+			std::string_view(reinterpret_cast<const char*>(l) + sizeof(LineRecord), l->len), nullptr, g.tid, l->loc,
+			l->indent, system_at(stamp_time(l->stamp)), std::chrono::nanoseconds(0)};
+		Logging::emit(line);
+	}
+
+	// Drops cancelled lines from the top of the deferred heap.
+	void purge() {
+		while (!deferred.empty() && !*deferred.front().task) {
+			std::pop_heap(deferred.begin(), deferred.end(), later_deferred);
+			deferred.pop_back();
+		}
+	}
+
+	// One look at the queues: writes, in due order (and call order within a due time), every queued
+	// line stamped at or before `gate` and due by `ring_due`, and every deferred line due by `now`.
+	// Leaves in `next_due` the earliest due time of what is left. True if it wrote or filed anything.
+	// Only lines stamped before the look began are taken (`gate`), so a line is never written ahead of
+	// one logged before it that was not yet visible.
+	bool pass(std::int64_t gate, std::int64_t ring_due, std::int64_t now) {
+		bool worked = false;
+		std::int64_t later_head = std::numeric_limits<std::int64_t>::max();
+		heads.clear();
+		auto* first = ring_list.load(std::memory_order_acquire);
+		for (auto* g = first; g != nullptr; g = g->next_ring) {
+			const auto before = filed;
+			Head h;
+			if (advance(*g, h)) {
+				if (h.created <= gate && h.due <= ring_due) {
+					heads.push_back(h);
+				} else {
+					later_head = std::min(later_head, h.due);
+				}
+			}
+			worked |= filed != before;
+		}
+		std::make_heap(heads.begin(), heads.end(), later);
+		for (;;) {
+			purge();
+			const bool ring = !heads.empty();
+			const bool heap = !deferred.empty() && deferred.front().due <= now;
+			if (!ring && !heap) {
+				break;
+			}
+			worked = true;
+			bool take_ring = ring;
+			if (ring && heap) {
+				const auto& a = heads.front();
+				const auto& d = deferred.front();
+				take_ring = a.due != d.due ? a.due < d.due : a.created <= d.created;
+			}
+			if (take_ring) {
+				std::pop_heap(heads.begin(), heads.end(), later);
+				Ring& g = *heads.back().ring;
+				heads.pop_back();
+				fire_head(g);
+				Head h;
+				if (advance(g, h)) {
+					if (h.created <= gate && h.due <= ring_due) {
+						heads.push_back(h);
+						std::push_heap(heads.begin(), heads.end(), later);
+					} else {
+						later_head = std::min(later_head, h.due);
+					}
+				}
+			} else {
+				std::pop_heap(deferred.begin(), deferred.end(), later_deferred);
+				auto task = std::move(deferred.back().task);
+				deferred.pop_back();
+				fire(task);
+			}
+		}
+		for (auto* g = first; g != nullptr; g = g->next_ring) {
+			g->rbuf->pub_r.store(g->r, std::memory_order_release);
+			if (g->owner.load(std::memory_order_acquire) == kOrphaned && drained(*g)) {
+				g->owner.store(kFree, std::memory_order_release);
+			}
+		}
+		if (written != 0) {
+			// release: whoever sees the count drained (acquire in pending_count) sees the writes.
+			Logging::completed_.n.fetch_add(written, std::memory_order_release);
+			written = 0;
+		}
+		purge();
+		next_due = deferred.empty() ? later_head : std::min(later_head, deferred.front().due);
+		return worked;
+	}
+
+	static bool drained(const Ring& g) noexcept {
+		return g.r == g.rbuf->pub_w.load(std::memory_order_seq_cst) && g.rbuf->next.load(std::memory_order_seq_cst) == nullptr;
+	}
+
+	// Whether any queue holds a record (seq_cst: the half of the sleep handshake after kSleeping).
+	static bool queued() noexcept {
+		for (auto* g = ring_list.load(std::memory_order_seq_cst); g != nullptr; g = g->next_ring) {
+			if (!drained(*g)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// The earliest due time among the queues' next lines and the deferred lines, filing the deferred
+	// lines it meets (the second look before a sleep).
+	std::int64_t earliest() {
+		std::int64_t e = std::numeric_limits<std::int64_t>::max();
+		for (auto* g = ring_list.load(std::memory_order_acquire); g != nullptr; g = g->next_ring) {
+			Head h;
+			if (advance(*g, h)) {
+				e = std::min(e, h.due);
+			}
+		}
+		if (!deferred.empty()) {
+			e = std::min(e, deferred.front().due);   // a cancelled top only wakes it early
+		}
+		return e;
+	}
+
+	// The last look: no queued line is left behind (a producer that queued one meanwhile sees kClosed
+	// and writes it itself unless this look got it), deferred lines due by now are written, and the
+	// rest are released.
+	void close() {
+		worker_state.fetch_or(kClosed, std::memory_order_seq_cst);
+		const auto now = steady_ns(std::chrono::steady_clock::now());
+		constexpr auto all = std::numeric_limits<std::int64_t>::max();
+		while (pass(all, all, now)) {   // every queued line, and the deferred lines due by now
+		}
+		final_done.store(true, std::memory_order_release);
+		for (auto& d : deferred) {
+			d.task.reset();
+		}
+		deferred.clear();
+	}
+
+	LogWorker() = default;
+
+public:
+	// The LOG thread, started on first use. It is never destroyed, so a line logged while statics are
+	// destroyed still finds it (stopped, so the line is written on the calling thread); at exit it is
+	// stopped as Logging::finish(1) would.
+	static LogWorker& get() {
+		static LogWorker* worker = [] {
+			auto* w = new LogWorker;
+			w->run();
+			return w;
+		}();
+		static struct Finisher {
+			~Finisher() {
+				worker->end(1);
+				worker->join(200ms);
+			}
+		} finisher;
+		(void)finisher;
+		return *worker;
+	}
+
+	const std::string& name() const noexcept {
+		static const std::string n = "LOG";
+		return n;
+	}
+
+	// finish(): stop taking lines, and count down `wait` passes (each up to 100 ms) to write what is due.
+	void end(int wait) noexcept {
+		ending.store(wait);
+		worker_state.fetch_or(kStopping, std::memory_order_seq_cst);
+		std::lock_guard<std::mutex> lk(mtx);
+		cv.notify_all();
+	}
+
+	// Wakes the LOG thread if it sleeps past `due` (steady_clock nanoseconds).
+	void wake_for(std::int64_t due) noexcept {
+		if (due < worker_wake.load(std::memory_order_relaxed)
+				&& (worker_state.fetch_and(~kSleeping, std::memory_order_seq_cst) & kSleeping) != 0) {
+			std::lock_guard<std::mutex> lk(mtx);
+			cv.notify_one();
+		}
+	}
+
+	// After a producer saw kClosed: once the last look is over, whether it took the record at `at`.
+	static bool taken(const Ring& g, std::uint64_t at) noexcept {
+		auto& w = get();
+		while (!w.final_done.load(std::memory_order_acquire)) {
+			std::this_thread::yield();
+		}
+		return g.rbuf == g.wbuf && g.r > at;
+	}
+
+	// A line the LOG thread did not take: the producer writes it.
+	static void write_untaken(const Ring& g, std::uint64_t at) {
+		write_line(g, reinterpret_cast<const LineRecord*>(g.data + (at & g.mask)));
+		Logging::completed_.n.fetch_add(1, std::memory_order_release);
+	}
+
+	// Queues a full record on the calling thread's queue, due at `due` (steady_clock nanoseconds; in
+	// queue order if `ordered`, by due time otherwise). False if it was refused (finish() has begun, or
+	// no memory): the caller handles the line by its kind.
+	static bool push_task(const std::shared_ptr<Logging>& task, std::int64_t due, std::int64_t created, bool ordered) noexcept {
+		if ((worker_state.load(std::memory_order_relaxed) & kStopping) != 0) {
+			return false;
+		}
+		auto& ts = thread_state;
+		Ring* g = static_cast<Ring*>(ts.ring);
+		std::unique_lock<std::mutex> lk;
+		if (g == nullptr && !ts.dead) {
+			g = static_cast<Ring*>(ring_attach());
+		}
+		if (g == nullptr) {
+			lk = std::unique_lock<std::mutex>(shared_ring_mutex);
+			if (shared_ring == nullptr) {
+				get();
+				shared_ring = new_ring(kShared);
+			}
+			g = shared_ring;
+			if (g == nullptr) {
+				return false;
+			}
+		}
+		constexpr std::size_t need = sizeof(TaskRecord);
+		char* p = g->data + (g->w & g->mask);
+		const std::uint64_t to_end = g->mask + 1 - (g->w & g->mask);
+		if (g->room - g->w < need || to_end < need) {
+			p = ring_room(*g, need);
+			if (p == nullptr) {
+				return false;
+			}
+		}
+		auto* rec = new (p) TaskRecord{static_cast<std::uint32_t>(need), kRecTask, static_cast<std::uint8_t>(ordered ? 1 : 0), {}, due, created, task};
+		const std::uint64_t at = g->w;
+		g->w = at + need;
+		g->posted.store(g->posted.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+		g->pub_w->store(g->w, std::memory_order_seq_cst);
+		const unsigned st = worker_state.load(std::memory_order_seq_cst);
+		if ((st & kClosed) != 0 && !taken(*g, at)) {
+			// The LOG thread closed without it: take it back, and refuse.
+			rec->~TaskRecord();
+			g->posted.store(g->posted.load(std::memory_order_relaxed) - 1, std::memory_order_relaxed);
+			return false;
+		}
+		if ((st & kSleeping) != 0) {
+			get().wake_for(due);
+		}
+		return true;
+	}
+
+	// The LOG thread's loop.
+	void operator()() {
+		using namespace std::chrono;
+		for (;;) {
+			if ((worker_state.load(std::memory_order_relaxed) & kStopping) != 0) {
+				// finish(): each pass writes what is due, then waits up to 100 ms for what comes due next;
+				// the loop ends when nothing is left or the countdown runs out.
+				for (auto e = ending.load(); e > 0 && !ending.compare_exchange_weak(e, e - 1);) {
+				}
+				for (;;) {
+					const auto t = steady_ns(steady_clock::now());
+					if (!pass(t, t, t)) {
+						break;
+					}
+				}
+				if (ending.load() == 0 || (!queued() && deferred.empty())) {
+					break;
+				}
+				const auto until = std::min(next_due, steady_ns(steady_clock::now() + 100ms));
+				std::unique_lock<std::mutex> lk(mtx);
+				cv.wait_until(lk, steady_clock::time_point(nanoseconds(until)), [&] { return ending.load() == 0; });
+				continue;
+			}
+			const auto t = steady_ns(steady_clock::now());
+			if (pass(t, t, t)) {
+				continue;   // it wrote or filed lines: look again at once
+			}
+			// Nothing due: sleep until the earliest line it knows of. A producer that queues one due
+			// earlier sees kSleeping (or this second look sees its line) and wakes it.
+			std::unique_lock<std::mutex> lk(mtx);
+			if ((worker_state.load(std::memory_order_relaxed) & kStopping) != 0) {
+				continue;
+			}
+			const auto until = next_due;
+			worker_wake.store(until, std::memory_order_relaxed);
+			worker_state.fetch_or(kSleeping, std::memory_order_seq_cst);
+			std::atomic_thread_fence(std::memory_order_seq_cst);
+			if (earliest() >= until) {
+				auto awake = [&] { return (worker_state.load(std::memory_order_seq_cst) & (kSleeping | kStopping)) != kSleeping; };
+				if (until == std::numeric_limits<std::int64_t>::max()) {
+					cv.wait(lk, awake);
+				} else {
+					cv.wait_until(lk, steady_clock::time_point(nanoseconds(until)), awake);
+				}
+			}
+			worker_state.fetch_and(~kSleeping, std::memory_order_seq_cst);
+		}
+		close();
+	}
+};
+
+}  // namespace logger_detail
+
+
+logger_detail::RingProducer*
+logger_detail::ring_attach() noexcept
+{
+	auto& ts = thread_state;
+	if (ts.dead) {
+		return nullptr;
+	}
+	LogWorker::get();   // the LOG thread runs before the first line is queued
+	Ring* g = nullptr;
+	for (auto* x = ring_list.load(std::memory_order_acquire); x != nullptr; x = x->next_ring) {
+		int f = kFree;
+		if (x->owner.load(std::memory_order_relaxed) == kFree && x->owner.compare_exchange_strong(f, kOwned, std::memory_order_acquire)) {
+			g = x;
+			g->tid = std::this_thread::get_id();
+			break;
+		}
+	}
+	if (g == nullptr && (g = new_ring(kOwned)) == nullptr) {
+		return nullptr;
+	}
+	static thread_local RingRelease release;
+	(void)release;
+	ts.tick = tick_stamps();
+	ts.ring = g;
+	return g;
+}
+
+
+std::size_t
+logger_detail::queue_count() noexcept
+{
+	std::size_t n = 0;
+	for (auto* g = ring_list.load(std::memory_order_acquire); g != nullptr; g = g->next_ring) {
+		++n;
+	}
+	return n;
+}
+
+
+long
+logger_detail::pending_count() noexcept
+{
+	return Logging::pending_count();
+}
+
+
+char*
+logger_detail::ring_room(RingProducer& p, std::size_t need) noexcept
+{
+	auto& g = static_cast<Ring&>(p);
+	need = (need + 7) & ~std::size_t{7};
+	RingBuf* b = g.wbuf;
+	g.room = b->pub_r.load(std::memory_order_acquire) + b->cap;
+	const std::uint64_t off = g.w & g.mask;
+	const std::uint64_t to_end = b->cap - off;
+	const std::uint64_t free = g.room - g.w;
+	if (to_end >= need && free >= need) {
+		return g.data + off;
+	}
+	if (to_end < need && free >= to_end + need) {
+		// Pad to the end of the buffer and start over at its beginning (published with the next record).
+		write_wrap(g.data + off, to_end);
+		g.w += to_end;
+		return g.data;
+	}
+	// Full: move to a buffer at least twice as big and four times the record. The LOG thread reads this
+	// one to its end, then follows `next`.
+	std::uint64_t cap = b->cap * 2;
+	while (cap < 4 * need) {
+		cap *= 2;
+	}
+	RingBuf* nb = RingBuf::make(cap);
+	if (nb == nullptr) {
+		return nullptr;
+	}
+	b->next.store(nb, std::memory_order_seq_cst);
+	g.wbuf = nb;
+	g.data = nb->data;
+	g.mask = cap - 1;
+	g.w = 0;
+	g.room = cap;
+	g.pub_w = &nb->pub_w;
+	return g.data;
+}
+
+
+void
+logger_detail::ring_published(RingProducer& p, unsigned state, std::uint64_t at) noexcept
+{
+	auto& g = static_cast<Ring&>(p);
+	if ((state & kClosed) != 0) {
+		if (!LogWorker::taken(g, at)) {
+			try {
+				LogWorker::write_untaken(g, at);
+			} catch (...) {
+			}
+		}
+		return;
+	}
+	if ((state & kSleeping) != 0) {
+		std::int64_t due, created;
+		line_key(reinterpret_cast<const LineRecord*>(g.data + (at & g.mask)), due, created);
+		LogWorker::get().wake_for(due);
+	}
+}
+
+
 // --- Logging -------------------------------------------------------------
 
-static constexpr std::chrono::nanoseconds kCoalesce = 1ms;   // the wheel's resolution
+static constexpr std::chrono::nanoseconds kCoalesce = 1ms;   // the batching tick
 
 Logging::Logging(std::string&& str_, bool clears_, bool async_, bool info_, uint64_t once_, int priority_,
 		std::exception_ptr eptr_, std::source_location loc_,
@@ -709,9 +1394,9 @@ Logging::Logging(std::string&& str_, bool clears_, bool async_, bool info_, uint
 	  info(info_),
 	  once(once_),
 	  eptr(std::move(eptr_)),
-	  thread_id(logger_detail::thread_state().id),
+	  thread_id(std::this_thread::get_id()),
 	  loc(loc_),
-	  indent(logger_detail::thread_state().indent),
+	  indent(logger_detail::thread_state.indent),
 	  scheduled(false),
 	  timestamp(timestamp_),
 	  atom_cleaned_at(std::chrono::steady_clock::time_point{}),
@@ -730,9 +1415,9 @@ Logging::Logging(std::string&& str_, bool clears_, bool async_, bool info_, uint
 	  async(async_),
 	  info(info_),
 	  once(once_),
-	  thread_id(logger_detail::thread_state().id),
+	  thread_id(std::this_thread::get_id()),
 	  loc(loc_),
-	  indent(logger_detail::thread_state().indent),
+	  indent(logger_detail::thread_state.indent),
 	  scheduled(false),
 	  timestamp(timestamp_),
 	  atom_cleaned_at(std::chrono::steady_clock::time_point{}),
@@ -753,19 +1438,12 @@ Logging::~Logging() noexcept
 }
 
 
-// Static-init-order safe singleton: the LOG thread starts on first use.
-Scheduler<Logging, ThreadPolicyType::logging>&
-Logging::scheduler()
-{
-	static Scheduler<Logging, ThreadPolicyType::logging> scheduler("LOG");
-	return scheduler;
-}
-
-
 bool
 Logging::finish(int wait)
 {
-	bool ok = scheduler().finish(wait);
+	auto& worker = logger_detail::LogWorker::get();
+	worker.end(wait);
+	bool ok = wait == 0 || worker.join(std::chrono::milliseconds(2 * wait * 100));
 	// Restore the terminal at shutdown: clear the iTerm2 badge / tab tint and pop
 	// the saved title. (A no-op unless iTerm2 customizations were applied.)
 	reset_iterm2();
@@ -775,7 +1453,23 @@ Logging::finish(int wait)
 bool
 Logging::join(int timeout)
 {
-	return scheduler().join(std::chrono::milliseconds(timeout));
+	return logger_detail::LogWorker::get().join(std::chrono::milliseconds(timeout));
+}
+
+
+long
+Logging::pending_count() noexcept
+{
+	// `completed_` first: a line's count in its queue's `posted` comes before its publish, which the LOG
+	// thread acquired before it completed the line (a release add), so every line counted in `done` has
+	// its count visible to the reads below and the difference cannot fall short.
+	long done = completed_.n.load(std::memory_order_acquire);
+	long n = 0;
+	for (auto* g = logger_detail::ring_list.load(std::memory_order_acquire); g != nullptr; g = g->next_ring) {
+		n += g->posted.load(std::memory_order_relaxed);
+	}
+	n -= done;
+	return n > 0 ? n : 0;
 }
 
 
@@ -874,39 +1568,35 @@ Logging::add_line(std::chrono::steady_clock::time_point wakeup, Msg&& str, bool 
 {
 	bool will_schedule = async || wakeup > now;
 
-	// A line due within kCoalesce of now is batched: it is due at now + kCoalesce, so the
-	// LOG thread sleeps to that time, and the lines queued meanwhile are due later than its
-	// wake time and need no signal. The shift is max(wakeup, now + kCoalesce), which is
-	// non-decreasing in both the due time and the call time: of two lines due in the order
-	// they were logged, the first never lands in a later tick than the second, and the
-	// queue keeps posting order within a tick. finish() drains it, so a line is not lost
-	// there.
-	//
-	// A line that would start a batch is not held: when nothing is pending (every line
-	// logged before it has been written or cancelled) it is due at its own time, no
-	// earlier than the call, and the LOG thread is woken for it, so an isolated line is
-	// written at once. A thread that posted such a line under kCoalesce ago is in a
-	// burst and batches without looking (pending_count() reads every counter); the gap
-	// also keeps this thread's ordered wakeups non-decreasing. A `clears` line always
-	// waits the full kCoalesce, so its handle can still cancel it.
+	// A line due within kCoalesce of its call is written in queue order, batched: it is due at
+	// now + kCoalesce, so the LOG thread sleeps to that time and the lines queued meanwhile need no
+	// signal. The shift is max(wakeup, now + kCoalesce), non-decreasing in both the due time and the
+	// call time, so of two lines due in the order they were logged the first is never due later.
+	// A line that would start a batch is not held: when its thread queued no such line in the last
+	// tick, nothing is pending (every line logged before it has been written or cancelled) and it is
+	// not a `clears` line (whose handle needs the full tick to cancel it), it is due at its own time,
+	// no earlier than its thread's clock, and the LOG thread is woken for it. The fast path in
+	// logger.h applies the same rule; both keep the thread's last such stamp.
 	const auto due_at = wakeup;
 	const bool soon = will_schedule && wakeup <= now + kCoalesce;
 	if (soon) {
-		auto& ts = logger_detail::thread_state();
-		if (!clears && now - ts.last_soon >= kCoalesce && pending_count() == 0) {
-			if (wakeup < now) {
-				wakeup = now;
+		auto& ts = logger_detail::thread_state;
+		const auto stamp = logger_detail::stamp_now();
+		if (!clears && stamp - ts.last_soon >= ts.tick && pending_count() == 0) {
+			const auto at = logger_detail::stamp_time(stamp);
+			if (wakeup < at) {
+				wakeup = at;
 			}
 		} else {
 			wakeup = now + kCoalesce;
 		}
-		ts.last_soon = now;
+		ts.last_soon = stamp;
 	}
 
-	// Backpressure: when the wheel is saturated, drop routine async lines (NOTICE
+	// Backpressure: when the queues are saturated, drop routine async lines (NOTICE
 	// and below severity, non-deferred) rather than grow without bound. Severe and
 	// deferred ("clears") lines are never dropped. The drop is counted and a
-	// coalesced summary is emitted by the next line that fires.
+	// coalesced summary is emitted by the next line that is written.
 	if (will_schedule && config.max_pending > 0
 			&& pending_count() >= static_cast<long>(config.max_pending)
 			&& !clears && priority >= LOG_NOTICE) {
@@ -928,20 +1618,19 @@ Logging::add_line(std::chrono::steady_clock::time_point wakeup, Msg&& str, bool 
 	}
 
 	if (will_schedule) {
-		// async ("now") and deferred ("now + delay") lines ride the wheel; the
-		// LOG thread fires operator() and writes them. They are handed to it with
-		// one compare-exchange; it files them into the wheel itself.
+		// Async ("now") and deferred ("now + delay") lines go to the LOG thread through this thread's
+		// queue, which keeps them in the order they were logged; the LOG thread writes a line due now
+		// in that order and keeps a deferred one until it is due, unless its handle cancels it first.
+		// A delay of a day or more is refused.
 		entry->scheduled = true;
-		auto& counter = stripe();
-		counter.n.fetch_add(1, std::memory_order_relaxed);
-		// A line due within the tick of its call is due exactly kCoalesce after it, so those arrive in
-		// due order and the LOG thread queues them without a wheel insert; the others are filed in the wheel.
-		auto result = soon ? scheduler().post_ordered(entry, wakeup, now) : scheduler().post(entry, wakeup, now);
-		if (result != schedule_result::scheduled) {
-			// Refused (stopping, or past the 24 h horizon); undo the count. The
-			// policy goes by the line's kind, not the reason.
+		const auto ns = [](std::chrono::steady_clock::time_point t) {
+			return std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
+		};
+		bool queued = wakeup - now < 24h && logger_detail::LogWorker::push_task(entry, ns(wakeup), ns(now), soon);
+		if (!queued) {
+			// Refused (stopping, or past the 24 h horizon). The policy goes by the line's kind,
+			// not the reason.
 			entry->scheduled = false;
-			counter.n.fetch_sub(1, std::memory_order_relaxed);
 			bool due = due_at <= std::chrono::steady_clock::now();
 			if (clears && !due) {
 				// A slow-work watchdog: never written now (that would log every fast
@@ -967,7 +1656,16 @@ Logging::add_line(std::chrono::steady_clock::time_point wakeup, Msg&& str, bool 
 void
 Logging::operator()()
 {
-	// Report any lines dropped under backpressure since the last fire.
+	logger_detail::Emit line{priority, info, async, once, str, eptr ? &eptr : nullptr, thread_id, loc, indent,
+		timestamp, async ? age() : std::chrono::nanoseconds(0)};
+	emit(line);
+}
+
+
+void
+Logging::emit(const logger_detail::Emit& line)
+{
+	// Report any lines dropped under backpressure since the last line written.
 	if (dropped_.n.load(std::memory_order_relaxed) != 0) {
 		if (auto d = dropped_.n.exchange(0, std::memory_order_relaxed); d > 0) {
 			log(LOG_WARNING, "dropped " + std::to_string(d) + " log lines (backpressure)");
@@ -975,31 +1673,31 @@ Logging::operator()()
 	}
 
 	// `once` dedup: emit only the first occurrence of this (message, token).
-	if (once != 0) {
+	if (line.once != 0) {
 		static OnceFilter filter;
-		uint64_t key = std::hash<std::string>{}(str) ^ (once * 0x9E3779B97F4A7C15ULL);
+		uint64_t key = std::hash<std::string_view>{}(line.str) ^ (line.once * 0x9E3779B97F4A7C15ULL);
 		if (filter.seen_or_add(key)) {
 			return;
 		}
 	}
 
 	std::string msg;
-	if (info) {
+	if (line.info) {
 		std::string deco;
 		if (config.with_timestamp) {
-			deco += hooked_timestamp(timestamp);
+			deco += hooked_timestamp(line.timestamp);
 		}
 		if (config.with_threads) {
 			deco += '(';
-			deco += hooked_thread_name(thread_id);
+			deco += hooked_thread_name(line.thread_id);
 			deco += ") ";
 		}
-		if (config.with_location && loc.line() != 0) {
-			deco += loc.file_name();
+		if (config.with_location && line.loc.line() != 0) {
+			deco += line.loc.file_name();
 			deco += ':';
-			deco += std::to_string(loc.line());
+			deco += std::to_string(line.loc.line());
 			deco += " at ";
-			deco += loc.function_name();
+			deco += line.loc.function_name();
 			deco += ": ";
 		}
 		if (!deco.empty()) {
@@ -1011,17 +1709,17 @@ Logging::operator()()
 		}
 	}
 
-	if (indent > 0) {
-		msg.append(static_cast<size_t>(indent) * 2, ' ');
+	if (line.indent > 0) {
+		msg.append(static_cast<size_t>(line.indent) * 2, ' ');
 	}
-	if (config.tint && priority >= 0 && priority < MAX_LOG_PRIORITY) { msg += tints[priority]; }
-	msg += str;
+	if (config.tint && line.priority >= 0 && line.priority < MAX_LOG_PRIORITY) { msg += tints[line.priority]; }
+	msg += line.str;
 
-	if (eptr) {
-		if (!str.empty()) {
+	if (line.eptr != nullptr && *line.eptr) {
+		if (!line.str.empty()) {
 			msg += ": ";
 		}
-		msg += hooked_describe_exception(eptr);
+		msg += hooked_describe_exception(*line.eptr);
 		auto bt = hooked_backtrace();
 		if (!bt.empty()) {
 			msg += '\n';
@@ -1029,15 +1727,12 @@ Logging::operator()()
 		}
 	}
 
-	if (async) {
-		auto a = age();
-		if (a > 100ms) {
-			msg += " ~";
-			msg += format_delta(a);
-		}
+	if (line.async && line.age > 100ms) {
+		msg += " ~";
+		msg += format_delta(line.age);
 	}
 
-	log(priority, std::move(msg));
+	log(line.priority, std::move(msg));
 }
 
 
@@ -1059,8 +1754,8 @@ Logging::clean()
 		auto late = refused_late();
 		if (Base::clear(true)) {
 			if (late) {
-				// Refused by the scheduler, and the work outlasted the delay: write
-				// it now, as the wheel would have, and keep the swap.
+				// Refused by the queue, and the work outlasted the delay: write
+				// it now, as the LOG thread would have, and keep the swap.
 				(*this)();
 			} else {
 				unlog_str.clear();
@@ -1095,7 +1790,7 @@ Logging::clear(bool internal)
 		return false;
 	}
 	if (late) {
-		// A refused watchdog cancelled after its deadline: the wheel would have
+		// A refused watchdog cancelled after its deadline: the LOG thread would have
 		// written it by now, so write it (its swap stays cancelled).
 		(*this)();
 	}
@@ -1138,23 +1833,45 @@ Log::Log(LogType entry_)
 }
 
 Log::Log(Log&& o) noexcept
-	: entry(std::move(o.entry))
+	: entry(std::move(o.entry)),
+	  swap(std::move(o.swap)),
+	  stamp(std::exchange(o.stamp, 0)),
+	  loc(o.loc),
+	  info(o.info)
 {
 }
 
 Log&
 Log::operator=(Log&& o) noexcept
 {
+	if (!entry && swap) {
+		drop();   // a queued line's swap is written when its handle goes, as a record's is when it is freed
+	}
 	entry = std::move(o.entry);
 	o.entry.reset();
+	swap = std::move(o.swap);
+	stamp = std::exchange(o.stamp, 0);
+	loc = o.loc;
+	info = o.info;
 	return *this;
 }
 
-Log::~Log() noexcept
+void
+Log::drop() noexcept
 {
 	try {
 		if (entry) {
 			entry->clean();
+			return;
+		}
+		auto sw = std::move(swap);
+		if (sw && stamp != 0 && sw->priority <= Logging::config.log_level) {
+			// What clean() does for a record: the swap is a new line, with the queued line's call site,
+			// stamp and wall-clock time.
+			const auto created = logger_detail::stamp_time(stamp);
+			const auto now = logger_detail::steady_now();
+			Logging::add(now, std::move(sw->str), false, true, info, 0, sw->priority, nullptr, loc,
+				created, logger_detail::system_at(created), now);
 		}
 	} catch (...) {
 	}
@@ -1165,13 +1882,19 @@ Log::unlog(int priority, std::string str)
 {
 	if (entry) {
 		entry->vunlog(priority, std::move(str));
+	} else if (stamp != 0) {
+		swap = std::make_unique<Swap>(Swap{priority, std::move(str)});
 	}
 }
 
 bool
 Log::clear()
 {
-	return entry ? entry->clear() : false;
+	if (entry) {
+		return entry->clear();
+	}
+	swap.reset();   // a queued line is already on its way: only its swap is cancelled
+	return false;
 }
 
 std::chrono::nanoseconds
@@ -1185,6 +1908,8 @@ Log::release()
 {
 	auto ret = entry;
 	entry.reset();
+	swap.reset();
+	stamp = 0;
 	return ret;
 }
 

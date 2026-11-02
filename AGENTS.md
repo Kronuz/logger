@@ -9,8 +9,11 @@ ARCHITECTURE.md; for usage see README.md and docs/API.md; for open design work s
   interface (`StreamLogger` / `StderrLogger` / `SysLog`), `Logging` (the log
   record, which is also a `ScheduledTask`, plus the static facade), the `Log`
   handle, and the `L_*` macro surface. Also the `format_msg` / `print_msg`
-  helpers and the `log_indent()` / `LogIndent` thread-local indent.
-- `logger.cc` — implementations: the sinks, the three-path `add()` router,
+  helpers, the `log_indent()` / `LogIndent` thread-local indent, and the
+  producer's half of the per-thread queues (`logger_detail::queue_line`, the
+  record layouts, `ThreadState`).
+- `logger.cc` — implementations: the queues' out-of-line half (`ring_attach`,
+  `ring_room`, `ring_published`), the LOG thread (`LogWorker`), the sinks, the three-path `add()` router,
   `operator()` decoration, `clean` / `clear` / `age`, the bounded `OnceFilter`,
   the default hook bodies, and backpressure. This file must be compiled and
   linked; the library is not header-only.
@@ -22,6 +25,10 @@ ARCHITECTURE.md; for usage see README.md and docs/API.md; for open design work s
   against `std::vformat`, on random and edge messages.
 - `test/producer.cc` — many producers against the LOG thread: exactly once, order across
   threads, the counters, and a `finish()` that races the producers (each round is a process).
+- `test/queue.cc` — the per-thread queues under 1 to 16 producers: the wrap at every offset
+  (`logger_queue_test wrap` alone), exactly once and in order, order across threads and by due
+  time, watchdogs armed and dropped, backpressure, swaps, the sleep handshake, short-lived
+  threads, exit without `finish()`, and `finish()` racing the producers.
 - `test/transcript.cc` + `test/transcript.cmake` + `test/frozen/` — one scripted run built
   against the library and against a frozen copy of the implementation before the producer
   path changed (`5299eb3`); the bytes must be identical. Never edit `test/frozen/`.
@@ -30,7 +37,8 @@ ARCHITECTURE.md; for usage see README.md and docs/API.md; for open design work s
   waits for the 1 ms batch.
 - `test/order.cc`, `test/timestamp.cc`, `test/tint.cc` — the ordering oracle, the timestamp
   formatter against its frozen `snprintf` form, and the tint/collapse paths.
-- `bench/lg.cc` (`logger_bench`) — producer cost against a synchronous fmt sink; `bench/parts.cc`
+- `bench/lg.cc` (`logger_bench`) — producer cost against a synchronous fmt + mutex logger and,
+  with `-DLOGGER_BENCH_QUILL=ON`, quill, with a same-text check (`--check`, a ctest); `bench/parts.cc`
   (each piece of a call alone), `bench/steady.cc` (a profiling loop), `bench/drain.cc` (the LOG
   thread's drain over time), `bench/latency.cc` (an isolated line from the call to its handler).
   Built with `-DLOGGER_BUILD_BENCH=ON`.
@@ -86,8 +94,8 @@ cmake --build build-tsan && ./build-tsan/logger_test
   the one-shot `clear(true)` CAS result in `clean()` (`logger.cc`): if `clear(true)`
   wins, the line had not fired, so suppress the swap. Don't "simplify" that
   branch.
-- **The LOG thread is the consumer and the writer.** There is one scheduler
-  thread; it drains the wheel and does the `write`s. Call `Logging::finish()` at
+- **The LOG thread is the consumer and the writer.** There is one LOG thread
+  (`LogWorker`); it drains the queues and does the `write`s. Call `Logging::finish()` at
   shutdown before the statics tear down, or pending async lines can outlive their
   sinks.
 - **`make_format_args` needs lvalues.** `format_msg` passes `args...` (not
@@ -100,62 +108,67 @@ cmake --build build-tsan && ./build-tsan/logger_test
 - **`config` / `hooks` / `handlers` are read unsynchronized.** Install handlers
   and set config before logging starts. Mutating them while the LOG thread runs
   is a data race (see docs/ROADMAP.md).
-- **A refused line keeps its meaning.** `Logging::add` checks the scheduler's
-  `add` result. On false (shutdown, or past the 24 h horizon) it undoes
-  `scheduled` and the `pending` increment, then: a future `clears` watchdog stays
-  armed with `refused_deadline`, and its cancel point (`clean()` or `clear()`)
-  writes it only if the deadline has passed; a line already due, or a severe one
-  (priority above `NOTICE`), is written inline now; a routine future line that
-  does not clear is lost (no cancel point). Never write a refused watchdog early:
-  it would log every fast operation. A refusal that `post` can report is handled this way
-  (`stopping`; a wakeup more than an hour out past the wheel's span). One that happens while the
-  LOG thread files the line (an allocation failure, or a wakeup under an hour out on a wheel the
-  LOG thread has not walked for most of a day) cannot reach the poster: the LOG thread runs the
-  line if it is due and drops it otherwise, so a severe future line refused there is not
-  written inline.
+- **A refused line keeps its meaning.** `Logging::add` checks `LogWorker::push_task`'s
+  result. On false (`finish()` began, a delay of a day or more, or no memory) it undoes
+  `scheduled`, then: a future `clears` watchdog stays armed with `refused_deadline`, and its
+  cancel point (`clean()` or `clear()`) writes it only if the deadline has passed; a line already
+  due, or a severe one (priority above `NOTICE`), is written inline now; a routine future line
+  that does not clear is lost (no cancel point). Never write a refused watchdog early: it would
+  log every fast operation. A routine line the fast path refuses (`queue_line` returns 0) takes
+  this path as a full record.
 - **Indent is captured at creation, on the producer thread.** `log_indent()` is
   `thread_local`; a line records the depth when it is built (on the producer),
   not when it fires (on the LOG thread). Keep the capture in the `Logging`
   constructor.
-- **The producer path allocates and shares as little as it can; keep it that way.** A routine
-  line is formatted into the thread's reusable buffer (`logger_detail::FormattedMsg`), copied
-  into one `Logging` record, and posted with one compare-exchange. Do not add a clock read, a
-  lock, a shared counter write, a thread-local access or an allocation to it without measuring
-  `bench/steady.cc` (a line costs about 75 ns on an M1 Pro; each of those is 3-20 ns).
+- **The producer path takes no lock, allocates nothing and does no read-modify-write; keep it
+  that way.** A routine line is formatted into the thread's own queue, stamped with one clock
+  read, and published with one store; the only shared data it writes is its queue. Do not add a
+  clock read, a lock, a shared write, a read-modify-write, a thread-local access or an allocation
+  to `queue_line` without timing `bench/lg.cc` on both machines (a line costs about 27 ns on an
+  M1 Pro; each of those is 3 to 20 ns).
 - **`FormattedMsg` renders the bytes `format_msg` renders.** Its fast path takes only fields
   that are exactly `{}` (plus `{{` and `}}`) over integers, `bool`, `char`, `std::string`,
   `std::string_view`, `const char*` and char arrays, and declines everything else (a spec or an
   index, a null pointer, a NUL inside an array, a malformed format) to `std::vformat`, which also
   decides what an error looks like (the format string itself). `test/format.cc` checks every
   accepted message against `std::vformat`; extend its generators when you widen the fast path.
-- **A line due within a tick of its call is posted ordered.** `Logging::add_line` posts a line
-  whose wakeup is at or before `now + kCoalesce` with `post_ordered` (its wakeup is
-  `now + kCoalesce`, so one thread's wakeups never decrease, which is what the scheduler's arrival
-  queue wants of a poster); every other line goes through `post` into the wheel. The exception
-  starts a batch: a line that is not `clears`, whose thread posted no such line in the last
-  `kCoalesce` (`ThreadState::last_soon`), and that finds `pending_count()` at 0 keeps its own
-  wakeup (no earlier than `now`), so the LOG thread is woken and an isolated line is written at
-  once. Keep all three conditions: without the pending check a thread's first line after a pause
-  signals the LOG thread even while it has lines to write (the batching that spares producers the
-  signal is gone), without the gap a thread's wakeups can decrease, and a `clears` line needs the
-  full tick for its handle to cancel it. `test/wake.cc` fails if the exception is gone, or if
-  it fires while a line is pending. Across threads
-  the wakeups can fall out of order by the gap between a thread's clock read and its push, so a
-  line may wait behind a later-due head, by up to that gap. The guarantee is the one `test/order.cc`
-  states: of two lines whose logging is ordered (one thread, or one thread's push completing before
-  the other's clock read) and due in that order, the first is written first. Lines of unordered
-  threads can leave due order by that gap. A poster that could post a wakeup earlier than its own
-  earlier ordered post breaks the queue's order.
-- **`pending_count()` is a difference.** Producers add to a striped `posted_` counter (a
-  cache line per stripe), the LOG thread adds to `completed_` when a record is destroyed (a
-  release add, so a reader that sees the count drained sees the writes), and `pending_count()`
-  is the sum less `completed_`. Do not put a shared counter back on the producer path, and keep
-  `dropped_`, `completed_` and each stripe on their own cache lines.
+- **A line due within a tick of its call is due 1 ms after it, unless it starts a burst.**
+  A line that is not `clears`, whose thread queued no such line in the last 1 ms
+  (`ThreadState::last_soon`), and that finds `pending_count()` at 0 is due at its call, and the
+  LOG thread is woken for it, so an isolated line is written at once. Keep all three conditions:
+  without the pending check a thread's first line after a pause signals the LOG thread even while
+  it has lines to write, without the gap one thread's due times can decrease (the LOG thread reads
+  each queue in order, so a line due before the one ahead of it would wait for it), and a `clears`
+  line needs the full tick for its handle to cancel it. `test/wake.cc` fails if the exception is
+  gone, or if it fires while a line is pending.
+- **The LOG thread takes only lines stamped before its pass began.** `LogWorker::pass(gate, ...)`
+  merges the queues' heads by (due, call time) and skips a head stamped after `gate`, its own clock
+  read before it looked. Without the gate a line could be written ahead of one logged before it on
+  another thread and not yet published (`test/queue.cc`'s order tests). Lines of two threads
+  stamped within one tick of the stamp clock can come out in either order (41.67 ns on Apple
+  silicon); that is the documented limit.
+- **Publish, then read the LOG thread's state, both sequentially consistent.** The producer stores
+  its write index and then loads `worker_state`; the LOG thread sets `kSleeping` (or `kClosed`),
+  fences, and looks at the queues once more. Either it sees the line or the producer sees it
+  sleeping (and wakes it if the line is due before `worker_wake`) or closed (and writes the line
+  itself unless the last look took it). Weakening either side loses a wakeup or a line at
+  `finish()`; the sleep handshake and finish race in `test/queue.cc` catch it.
+- **A wrap is only a record head.** `ring_room` pads to the end of the buffer with an 8-byte
+  `RecordHead` written with `memcpy`, whatever room is left. A placement `new` of a `LineRecord`
+  there (whose `std::source_location` member's constructor writes) overran the buffer by up to
+  its header; `logger_queue_test wrap` under ASan catches it.
+- **`pending_count()` is a difference.** Each queue counts its own lines in `posted` (only its
+  thread writes it), `completed_` counts what left the queues (the LOG thread adds its written lines
+  once per pass, a record adds itself as it is destroyed; release adds, so a reader
+  that sees the count drained sees the writes), and `pending_count()` is the sum less
+  `completed_`. Do not put a shared counter on the producer path, and keep `dropped_`,
+  `completed_`, `worker_state` and each queue's producer and consumer halves on their own 128 bytes.
 - **The wall-clock stamp is derived.** `logger_detail::system_at(steady_now())` adds the offset
   between the clocks, measured again every 20 ms; it is exact to the drift over 20 ms, not to the
   nanosecond. `Logging::do_log` (the public entry point) still reads both clocks.
-- **`steady_now()` agrees with `steady_clock::now()`.** On macOS it reads `mach_continuous_time`
-  after a check at start-up that it matches `steady_clock` to a millisecond; the scheduler and the
-  refusal path compare against `steady_clock::now()`, so a clock that did not match would put
-  every line in the wrong tick.
+- **`steady_now()` and the stamps agree with `steady_clock::now()`.** On macOS `steady_now()` reads
+  `mach_continuous_time` after a check at start-up that it matches `steady_clock` to a millisecond,
+  and a queued line's stamp is that clock's raw count, which `stamp_time` converts exactly; the LOG
+  thread and the refusal path compare against `steady_clock::now()`, so a clock that did not match
+  would put every line at the wrong due time.
 

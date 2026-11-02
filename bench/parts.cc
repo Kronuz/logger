@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <format>
 #include <iterator>
@@ -78,6 +79,27 @@ int main() {
 		head.compare_exchange_strong(expected, reinterpret_cast<void*>(static_cast<uintptr_t>(i)), std::memory_order_seq_cst);
 	});
 	run("seq_cst fence", [](long) { std::atomic_thread_fence(std::memory_order_seq_cst); });
+#if defined(__x86_64__)
+	run("rdtsc", [](long) { unsigned lo, hi; asm volatile("rdtsc" : "=a"(lo), "=d"(hi)); sink(lo); sink(hi); });
+#endif
+	// The publish of a per-thread queue: a store of the write index, then a load of the consumer's state,
+	// ordered (seq_cst, a store-load barrier) or not (release store, relaxed load).
+	{
+		alignas(64) static std::atomic<std::uint64_t> windex{0};
+		alignas(64) static std::atomic<int> cstate{0};
+		run("release store + relaxed load (own lines)", [](long i) {
+			windex.store(static_cast<std::uint64_t>(i), std::memory_order_release);
+			sink(cstate.load(std::memory_order_relaxed));
+		});
+		run("seq_cst store + seq_cst load (own lines)", [](long i) {
+			windex.store(static_cast<std::uint64_t>(i), std::memory_order_seq_cst);
+			sink(cstate.load(std::memory_order_seq_cst));
+		});
+		run("exchange seq_cst + relaxed load (own lines)", [](long i) {
+			sink(windex.exchange(static_cast<std::uint64_t>(i), std::memory_order_seq_cst));
+			sink(cstate.load(std::memory_order_relaxed));
+		});
+	}
 
 	static std::string scratch;
 	scratch.reserve(512);

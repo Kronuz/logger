@@ -28,7 +28,8 @@
 #include <charconv>      // for std::to_chars
 #include <chrono>        // for steady_clock, system_clock, time_point
 #include <cstring>       // for std::memchr
-#include <cstdint>       // for uint64_t
+#include <cstdint>       // for uint64_t, INT16_MIN, UINT32_MAX
+#include <new>           // for placement new
 #include <exception>     // for std::exception_ptr
 #include <format>        // for std::vformat, std::make_format_args
 #include <functional>    // for std::function
@@ -42,6 +43,9 @@
 #include <utility>       // for std::forward
 #include <vector>        // for std::vector
 #include <syslog.h>      // for LOG_WARNING, LOG_ERR, LOG_DEBUG, ...
+#if defined(__APPLE__)
+#include <mach/mach_time.h>   // for mach_continuous_time
+#endif
 
 #include "scheduler.h"   // for Scheduler, ScheduledTask, ThreadPolicyType
 
@@ -106,8 +110,8 @@ struct LogConfig {
 	// Xapiand's lines read. Colors inside a message still apply after it.
 	bool tint = false;
 
-	// Backpressure. 0 = unbounded. Otherwise, once this many lines are pending on
-	// the wheel, routine async lines (NOTICE and below severity, non-deferred) are
+	// Backpressure. 0 = unbounded. Otherwise, once this many lines are pending
+	// (queued, not yet written), routine async lines (NOTICE and below severity, non-deferred) are
 	// dropped instead of queued, and a coalesced "dropped N" summary is emitted.
 	// Severe and deferred lines are never dropped.
 	size_t max_pending = 0;
@@ -182,17 +186,92 @@ inline thread_local ScratchSlot scratch_slot;
 bool scratch_init() noexcept;   // allocates the buffers on first use; false once the slot is dead
 char* scratch_grow() noexcept;  // doubles the raw buffer (to 1 MiB at most); null if it cannot
 
-// What the logger keeps per thread: the thread's id and stacked-indent depth (captured into each line
-// when it is made), and which of the lines-posted counters the thread adds to. One thread-local block, so
-// a line's creation costs one thread-local access instead of three, and no call to pthread_self.
-inline constexpr unsigned kStripes = 8;
-struct ThreadState {
-	std::thread::id id;
-	int indent = 0;
-	unsigned stripe = 0;
-	std::chrono::steady_clock::time_point last_soon{};   // the call time of this thread's last line due within a tick
+// Data that one thread writes and another reads sits on its own 128 bytes: the cache line of Apple
+// silicon, and the pair of lines Intel's adjacent-line prefetcher fetches together.
+inline constexpr std::size_t kCacheLine = 128;
+
+// The producer's half of a thread's line queue (ARCHITECTURE.md, "The per-thread queues"): a byte ring
+// the thread writes records into and the LOG thread reads them from. Only the owning thread touches
+// these fields; the LOG thread reads what `pub_w` publishes, and frees space through the buffer's read
+// index, which the producer reads only when it runs out of room.
+struct RingProducer {
+	char* data = nullptr;          // the buffer records go into
+	std::uint64_t mask = 0;        // its capacity less one (a power of two)
+	std::uint64_t w = 0;           // the write index in it, in bytes; it never wraps
+	std::uint64_t room = 0;        // the producer may write below this index (the read index + capacity, as last read)
+	std::atomic<std::uint64_t>* pub_w = nullptr;   // the buffer's published write index
+	std::atomic<long> posted{0};   // lines put in the queue (pending_count()); only the owner writes it
 };
-ThreadState& thread_state() noexcept;
+
+// What the logger keeps per thread, in one constant-initialized thread-local block: the thread's queue
+// (made on its first queued line), and its stacked-indent depth (captured into each line when it is made).
+// `dead` is set when the thread's queue is released at thread exit; a line logged after that (from
+// another thread-local's destructor) goes through a shared queue.
+struct ThreadState {
+	RingProducer* ring = nullptr;
+	int indent = 0;
+	bool dead = false;
+	std::uint64_t last_soon = 0;   // the stamp of this thread's last line due within a tick
+	std::uint64_t tick = 0;        // one tick (1 ms) in stamp units, set when the queue is attached
+};
+inline thread_local ThreadState thread_state{};
+
+// The LOG thread's state, which producers read: `kStopping` once finish() has begun (a new line is
+// refused, and written on the calling thread if it is due), `kSleeping` while it sleeps until
+// `worker_wake` (steady_clock nanoseconds; the producer that queues a line due before then wakes it),
+// `kClosed` once it has taken its last look at the queues (a producer that queued a line just then
+// takes it back unless the LOG thread got it).
+inline constexpr unsigned kSleeping = 1, kStopping = 2, kClosed = 4;
+alignas(kCacheLine) inline std::atomic<unsigned> worker_state{0};
+alignas(kCacheLine) inline std::atomic<std::int64_t> worker_wake{0};
+
+// A record in a thread's queue: a header, then the message (a line) or a reference to a `Logging`
+// record (a task: any line the macros' fast path does not take, kept by the full record). Every record
+// starts with its size and kind; a wrap record (padding to the end of the buffer) is only that.
+enum : std::uint8_t { kRecLine = 1, kRecTask = 2, kRecWrap = 3 };
+struct RecordHead {
+	std::uint32_t size;        // bytes of the record, this header included; a multiple of 8
+	std::uint8_t kind;
+	std::uint8_t pad_[3];
+};
+enum : std::uint8_t { kLineInfo = 1, kLineAtOnce = 2 };
+struct LineRecord {
+	std::uint32_t size;        // bytes of the record, this header included; a multiple of 8
+	std::uint8_t kind;         // kRecLine
+	std::uint8_t flags;        // kLineInfo: decorate with timestamp / thread / location; kLineAtOnce: due at
+	                           // its stamp (nothing was pending), else one tick after it
+	std::int16_t priority;
+	std::uint32_t len;         // bytes of the message, which follows the header
+	std::int32_t indent;       // the thread's stacked indent at the call
+	std::uint64_t stamp;       // stamp_now() at the call
+	std::uint64_t once;        // dedup token; 0 = no dedup
+	std::source_location loc;
+};
+static_assert(sizeof(LineRecord) % 8 == 0, "records are 8-byte aligned");
+inline constexpr std::size_t kMaxFastRoom = std::size_t{1} << 20;   // the fast formatter gives up past this
+
+// The clock a queued line is stamped with: on macOS the raw count of mach_continuous_time (the clock
+// behind steady_clock there), which the LOG thread converts; elsewhere steady_clock's nanoseconds. The
+// conversion (stamp_time) is exact, so a stamp orders against any steady_clock reading.
+#if defined(__APPLE__)
+inline std::uint64_t stamp_now() noexcept { return mach_continuous_time(); }
+#else
+inline std::uint64_t stamp_now() noexcept {
+	return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+#endif
+std::chrono::steady_clock::time_point stamp_time(std::uint64_t stamp) noexcept;
+
+// Out of line (logger.cc): this thread's queue, made (or a released one taken) on first use, null once
+// the thread is exiting; `need` contiguous bytes at the write index, wrapping to the start or moving to a
+// bigger buffer, null if no memory; and what follows a publish the LOG thread must hear of (it sleeps:
+// wake it; it has closed: write the line here unless it got it).
+RingProducer* ring_attach() noexcept;
+std::size_t queue_count() noexcept;   // queues made so far (tests)
+char* ring_room(RingProducer& ring, std::size_t need) noexcept;
+void ring_published(RingProducer& ring, unsigned state, std::uint64_t at) noexcept;
+long pending_count() noexcept;        // Logging::pending_count()
 
 // Passed where a line has no exception to describe, so the common path builds no std::exception_ptr
 // (its destructor is a call into the runtime, even for a null one).
@@ -467,27 +546,31 @@ class Logging;
 using LogType = std::shared_ptr<Logging>;
 
 
-// One log entry, and also a ScheduledTask so the async and deferred paths can
-// ride the scheduler's lock-free wheel. The scheduler's single "LOG" consumer
-// thread fires operator() and writes the line. See ARCHITECTURE.md.
+namespace logger_detail {
+class LogWorker;
+struct Emit;
+}
+
+// One log entry kept as a full record: a line the macros' fast path does not take (a deferred or
+// cancellable line, an exception, a line logged through do_log). It is a ScheduledTask, whose one-shot
+// clear() decides between the LOG thread writing it and its handle cancelling it. The LOG thread fires
+// operator(), which writes the line. See ARCHITECTURE.md.
 class Logging : public ScheduledTask<Scheduler<Logging, ThreadPolicyType::logging>, Logging, ThreadPolicyType::logging> {
 	friend class Log;
+	friend class logger_detail::LogWorker;
 
 	using Base = ScheduledTask<Scheduler<Logging, ThreadPolicyType::logging>, Logging, ThreadPolicyType::logging>;
 
-	static Scheduler<Logging, ThreadPolicyType::logging>& scheduler();
-
-	// Lines on the wheel and lines dropped, each counter on its own cache line, because
-	// producers write them on every line while the LOG thread writes others: a line per
-	// producer stripe counts lines put on the wheel, one the LOG thread owns counts those
-	// that left it, and the lines pending are the difference.
-	struct alignas(64) Counter {
+	// Lines that left the queues and lines dropped, each counter on its own cache line. Producers
+	// count the lines they queue in their own queue's `posted`; the LOG thread (and a full record's
+	// destructor) counts the lines that left; the lines pending are the difference.
+	struct alignas(logger_detail::kCacheLine) Counter {
 		std::atomic<long> n{0};
 	};
-	static Counter posted_[logger_detail::kStripes];   // lines put on the wheel, by the putting thread's stripe
-	static Counter completed_;          // lines that left it (fired, cancelled, refused or dropped)
+	static Counter completed_;          // lines that left the queues (written, cancelled, refused or dropped)
 	static Counter dropped_;            // lines dropped under backpressure, not yet reported
-	static Counter& stripe() noexcept;  // this thread's posted_ entry
+
+	static void emit(const logger_detail::Emit& line);   // decorates a line and writes it to every handler
 
 	std::string str;
 	int priority;
@@ -499,9 +582,9 @@ class Logging : public ScheduledTask<Scheduler<Logging, ThreadPolicyType::loggin
 	std::thread::id thread_id;
 	std::source_location loc;   // call site (file / line / function), C++20
 	int indent;         // stacked-indent depth, captured at creation (thread-local)
-	bool scheduled;     // was put on the wheel (so ~Logging counts it as completed)
-	// Set when the scheduler refused a future `clears` line: it stays armed off the
-	// wheel, and its cancel point (clean() or clear()) writes it only if this
+	bool scheduled;     // was queued for the LOG thread (so ~Logging counts it as completed)
+	// Set when the queue refused a future `clears` line: it stays armed off the
+	// queue, and its cancel point (clean() or clear()) writes it only if this
 	// deadline has passed, i.e. the work was slow.
 	std::chrono::steady_clock::time_point refused_deadline{};
 	std::chrono::system_clock::time_point timestamp;
@@ -573,6 +656,18 @@ public:
 		uint64_t once, int priority, std::exception_ptr eptr, std::source_location loc,
 		const logger_detail::FormattedMsg& msg);
 
+	// What the macros call once the level lets the line through. A routine line (queued for the LOG
+	// thread, due now, not cancellable, no exception) is written straight into the thread's queue and
+	// gets an empty handle: there is nothing to cancel or swap. Any other line is a full record.
+	template <typename... Args>
+	static Log log_in(bool clears, std::chrono::steady_clock::duration delay, bool async, bool info,
+		uint64_t once, int priority, logger_detail::NoException, std::source_location loc,
+		std::string_view fmt, Args&&... args);
+	template <typename... Args>
+	static Log log_in(bool clears, std::chrono::steady_clock::duration delay, bool async, bool info,
+		uint64_t once, int priority, std::exception_ptr eptr, std::source_location loc,
+		std::string_view fmt, Args&&... args);
+
 	// Drain and stop the LOG thread. Call at shutdown before the statics tear down.
 	static bool finish(int wait = 10);
 	static bool join(int timeout = 60000);
@@ -580,19 +675,8 @@ public:
 	// Lines dropped under backpressure so far (observability / tests).
 	static long dropped_count() { return dropped_.n.load(std::memory_order_relaxed); }
 
-	// Lines on the wheel now (observability / tests).
-	static long pending_count() {
-		// `completed_` first: a line's increment of its stripe comes before its push, which the LOG
-		// thread acquired before it completed the line (a release add), so every line counted in
-		// `done` has its increment visible to the stripe reads below and the sum cannot fall short.
-		long done = completed_.n.load(std::memory_order_acquire);
-		long n = 0;
-		for (const auto& c : posted_) {
-			n += c.n.load(std::memory_order_relaxed);
-		}
-		n -= done;
-		return n > 0 ? n : 0;
-	}
+	// Lines queued and not yet written, cancelled or dropped (observability / tests).
+	static long pending_count() noexcept;
 
 	// iTerm2 terminal integration. Each emits an iTerm2 proprietary escape code,
 	// and is a safe no-op unless stderr is an iTerm2 terminal (auto-detected via
@@ -608,7 +692,7 @@ public:
 	void vunlog(int priority, std::string&& str);
 	void clean();
 	bool clear(bool internal = false);
-	bool refused_late() const;   // refused by the scheduler and past its deadline
+	bool refused_late() const;   // refused by the queue and past its deadline
 	std::chrono::nanoseconds age();
 
 	void operator()();
@@ -618,24 +702,180 @@ public:
 // Owns a scheduled log and lets the caller cancel it or swap its message before
 // it fires. Dropping the handle runs clean(): cancel the line if it `clears`,
 // otherwise emit the swapped-in message.
+//
+// A routine line the macros wrote straight into the thread's queue has no record: its handle keeps
+// the line's stamp and call site, so unlog() still swaps in a message, written when the handle is
+// dropped. Such a line cannot be cancelled once it is queued: clear() drops the swap and returns
+// false, as it does for a line the LOG thread has already written.
 class Log {
 	LogType entry;
+	struct Swap {
+		int priority;
+		std::string str;
+	};
+	std::unique_ptr<Swap> swap;    // a queued line's swap, set by unlog()
+	std::uint64_t stamp = 0;       // a queued line's stamp (0: no queued line)
+	std::source_location loc{};
+	bool info = false;
 
 	Log(const Log&) = delete;
 	Log& operator=(const Log&) = delete;
+
+	void drop() noexcept;   // the queued line's swap, when the handle goes
 
 public:
 	Log() = default;
 	Log(Log&& o) noexcept;
 	Log& operator=(Log&& o) noexcept;
 	explicit Log(LogType entry);
-	~Log() noexcept;
+	Log(std::uint64_t stamp, std::source_location loc, bool info) noexcept : stamp(stamp), loc(loc), info(info) {}
+	~Log() noexcept {
+		if (entry || swap) {
+			drop();
+		}
+	}
 
 	void unlog(int priority, std::string str);
 	bool clear();
 	std::chrono::nanoseconds age();
 	LogType release();
 };
+
+
+namespace logger_detail {
+// Writes a routine line into the calling thread's queue: formats the message in place (the fast
+// formatter, or std::vformat into the thread's buffer and a copy), stamps it, and publishes the write
+// index. Returns the stamp, or 0 if it cannot (the thread's queue is gone, finish() has begun,
+// backpressure is on, the priority does not fit the record, or no memory): the caller makes a full
+// record instead.
+//
+// The line is due one tick (1 ms) after its stamp, so a burst is written in batches and the LOG thread
+// needs no signal per line; a line that starts a burst (the thread queued none in the last tick) and
+// finds nothing pending is due at its stamp, and the LOG thread is woken for it.
+template <typename... Args>
+inline std::uint64_t queue_line(int priority, bool info, std::uint64_t once, std::source_location loc,
+		std::string_view fmt, const Args&... args) {
+	auto& ts = thread_state;
+	RingProducer* r = ts.ring;
+	if (r == nullptr && (r = ring_attach()) == nullptr) {
+		return 0;
+	}
+	if ((worker_state.load(std::memory_order_relaxed) & kStopping) != 0 || Logging::config.max_pending != 0
+			|| priority < INT16_MIN || priority > INT16_MAX) {
+		return 0;
+	}
+	constexpr std::size_t H = sizeof(LineRecord);
+	// Contiguous bytes free at the write index: up to the read index, or to the end of the buffer.
+	auto contiguous = [r]() noexcept -> std::size_t {
+		const std::uint64_t to_end = r->mask + 1 - (r->w & r->mask);
+		const std::uint64_t free = r->room - r->w;
+		return static_cast<std::size_t>(free < to_end ? free : to_end);
+	};
+	char* rec = nullptr;
+	std::size_t len = 0;
+	auto copy = [&](std::string_view m) noexcept -> bool {
+		if (m.size() > UINT32_MAX - 2 * H) {
+			return 0;
+		}
+		if (contiguous() < H + m.size() && ring_room(*r, H + m.size()) == nullptr) {
+			return 0;
+		}
+		rec = r->data + (r->w & r->mask);
+		if (!m.empty()) {
+			std::memcpy(rec + H, m.data(), m.size());
+		}
+		len = m.size();
+		return true;
+	};
+	if constexpr (sizeof...(Args) == 0) {
+		if (!copy(fmt)) {
+			return 0;
+		}
+	} else if constexpr ((fast_format_arg_v<Args> && ...)) {
+		FastResult res = FastResult::declined;
+		for (;;) {
+			const std::size_t c = contiguous();
+			rec = r->data + (r->w & r->mask);
+			if (c > H) {
+				FastOut o{rec + H, rec + c};
+				res = fast_format(o, fmt, args...);
+				if (res == FastResult::ok) {
+					len = static_cast<std::size_t>(o.p - (rec + H));
+					break;
+				}
+				if (res == FastResult::declined) {
+					break;
+				}
+			}
+			if (c >= kMaxFastRoom) {
+				res = FastResult::declined;   // a message this long goes through std::vformat
+				break;
+			}
+			if (ring_room(*r, c < 128 ? 256 : 2 * c) == nullptr) {
+				return 0;
+			}
+		}
+		if (res != FastResult::ok) {
+			FormattedMsg m(fmt, args...);
+			if (!copy(m.view())) {
+				return 0;
+			}
+		}
+	} else {
+		FormattedMsg m(fmt, args...);
+		if (!copy(m.view())) {
+			return 0;
+		}
+	}
+	const std::uint64_t at = r->w;
+	const std::uint64_t stamp = stamp_now();
+	bool at_once = false;
+	if (stamp - ts.last_soon >= ts.tick) [[unlikely]] {
+		at_once = pending_count() == 0;
+	}
+	ts.last_soon = stamp;
+	auto* h = new (rec) LineRecord;
+	h->size = static_cast<std::uint32_t>((H + len + 7) & ~std::size_t{7});
+	h->kind = kRecLine;
+	h->flags = static_cast<std::uint8_t>((info ? kLineInfo : 0) | (at_once ? kLineAtOnce : 0));
+	h->priority = static_cast<std::int16_t>(priority);
+	h->len = static_cast<std::uint32_t>(len);
+	h->indent = ts.indent;
+	h->stamp = stamp;
+	h->once = once;
+	h->loc = loc;
+	r->w = at + h->size;
+	r->posted.store(r->posted.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+	// The store and the load below pair with the LOG thread's store of kSleeping (or kClosed) and its
+	// look at the queues (all seq_cst): either it sees this line, or this sees it sleeping (or closed).
+	r->pub_w->store(r->w, std::memory_order_seq_cst);
+	if (const unsigned st = worker_state.load(std::memory_order_seq_cst); st != 0) [[unlikely]] {
+		ring_published(*r, st, at);
+	}
+	return stamp;
+}
+}  // namespace logger_detail
+
+template <typename... Args>
+inline Log Logging::log_in(bool clears, std::chrono::steady_clock::duration delay, bool async, bool info,
+		uint64_t once, int priority, std::exception_ptr eptr, std::source_location loc,
+		std::string_view fmt, Args&&... args) {
+	return do_log_in(clears, delay, async, info, once, priority, std::move(eptr), loc,
+		logger_detail::FormattedMsg(fmt, args...));
+}
+
+template <typename... Args>
+inline Log Logging::log_in(bool clears, std::chrono::steady_clock::duration delay, bool async, bool info,
+		uint64_t once, int priority, logger_detail::NoException, std::source_location loc,
+		std::string_view fmt, Args&&... args) {
+	if (async && !clears && delay <= std::chrono::steady_clock::duration::zero()) {
+		if (const auto stamp = logger_detail::queue_line(priority, info, once, loc, fmt, args...); stamp != 0) {
+			return Log(stamp, loc, info);
+		}
+	}
+	return do_log_in(clears, delay, async, info, once, priority, logger_detail::NoException{}, loc,
+		logger_detail::FormattedMsg(fmt, args...));
+}
 
 
 // Remove ANSI SGR escape sequences from `str` (used when color is off).
@@ -695,8 +935,8 @@ struct LogIndent {
 // build the message and route it. Yields a Log handle.
 #define L_LOG_BASE(clears, delay, async, info, once, priority, eptr, ...) \
 	(((priority) <= Logging::config.log_level) \
-		? Logging::do_log_in((clears), (delay), (async), (info), (once), (priority), \
-			(eptr), std::source_location::current(), logger_detail::FormattedMsg(__VA_ARGS__)) \
+		? Logging::log_in((clears), (delay), (async), (info), (once), (priority), \
+			(eptr), std::source_location::current(), __VA_ARGS__) \
 		: Log())
 
 #define LOG(once, priority, ...) \
