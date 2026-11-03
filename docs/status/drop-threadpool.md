@@ -14,7 +14,9 @@
 
 ## Proof
 
-See the commit message for the preflight and CI runs.
+- `preflight.sh` at `e462011` (scheduler `181ed03`): mac hardened, mac ASan+UBSan and Linux ok; the FreeBSD VM failed
+  `logger_clock` (`CHECK FAILED at line 47: w <= s1 + kSlack`, a timing slack on a busy VM; the other ten tests passed). Not rerun
+  there (the producer test alone takes 9 minutes). CI at `2356791`: run 41546525411, all 8 jobs green including FreeBSD.
 
 ## Next
 
