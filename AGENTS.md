@@ -7,7 +7,7 @@ ARCHITECTURE.md; for usage see README.md and docs/API.md; for open design work s
 
 - `logger.h` — the public API: `LogConfig`, `LogHooks`, the `Logger` sink
   interface (`StreamLogger` / `StderrLogger` / `SysLog`), `Logging` (the log
-  record, which is also a `ScheduledTask`, plus the static facade), the `Log`
+  record, which is also a `wheel::timer_entry`, plus the static facade), the `Log`
   handle, and the `L_*` macro surface. Also the `format_msg` / `print_msg`
   helpers, the `log_indent()` / `LogIndent` thread-local indent, and the
   producer's half of the per-thread queues (`logger_detail::queue_line`, the
@@ -29,9 +29,9 @@ ARCHITECTURE.md; for usage see README.md and docs/API.md; for open design work s
   (`logger_queue_test wrap` alone), exactly once and in order, order across threads and by due
   time, watchdogs armed and dropped, backpressure, swaps, the sleep handshake, short-lived
   threads, exit without `finish()`, and `finish()` racing the producers.
-- `test/transcript.cc` + `test/transcript.cmake` + `test/frozen/` — one scripted run built
-  against the library and against a frozen copy of the implementation before the producer
-  path changed (`5299eb3`); the bytes must be identical. Never edit `test/frozen/`.
+- `test/transcript.cc` + `test/transcript.cmake` + `test/transcript.golden` — one scripted run
+  whose bytes must equal the golden file, which the implementation before the producer path
+  changed (`5299eb3`) wrote. Edit the golden only for an intended change to what is written.
 - `test/clock.cc` — `steady_now()` and `system_at()` against `steady_clock` and `system_clock`.
 - `test/wake.cc` — an isolated line is written at once, and one logged while a line is pending
   waits for the 1 ms batch.
@@ -42,7 +42,7 @@ ARCHITECTURE.md; for usage see README.md and docs/API.md; for open design work s
   (each piece of a call alone), `bench/steady.cc` (a profiling loop), `bench/drain.cc` (the LOG
   thread's drain over time), `bench/latency.cc` (an isolated line from the call to its handler).
   Built with `-DLOGGER_BUILD_BENCH=ON`.
-- `CMakeLists.txt` — FetchContents `scheduler`, builds the static library, and
+- `CMakeLists.txt` — FetchContents `threadpool`, `wheel`, `term-color` and `cppcodec`, builds the static library, and
   wires the test and demo when this repo is the top-level project.
 
 ## Build & run
@@ -70,7 +70,7 @@ cmake --build build-tsan && ./build-tsan/logger_test
 - C++20. Double quotes in code. No em dashes in docs.
 - MIT-licensed; keep the copyright header (Copyright (c) 2015-2019 Dubalu LLC) on
   source files.
-- The core depends on `Kronuz/scheduler` and `Kronuz/term-color` (the palette plus
+- The core depends on `Kronuz/threadpool`, `Kronuz/wheel` and `Kronuz/term-color` (the palette plus
   the `collapse`/`apply` resolution the sink runs per line), plus `cppcodec`
   (header-only) used only in `logger.cc` to base64-encode the iTerm2 badge text.
   Everything *host-specific* (exception description, real backtraces, thread names,
@@ -102,7 +102,7 @@ cmake --build build-tsan && ./build-tsan/logger_test
   `std::forward`ed) into `std::make_format_args`. Do not change it to
   `std::forward<Args>(args)...`; that reintroduces the rvalue temporaries it
   rejects.
-- **`L_EXC` undefs a stub.** stash and scheduler bundle a no-op `L_EXC` (and
+- **`L_EXC` undefs a stub.** stash bundles a no-op `L_EXC` (and
   `L_NOTHING` / `L_DEBUG_HOOK` / `L_CALL`) so they build without a logger. The
   macro block `#undef`s `L_EXC` before defining the real one. Keep that undef.
 - **`config` / `hooks` / `handlers` are read unsynchronized.** Install handlers

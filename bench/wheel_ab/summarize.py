@@ -1,4 +1,4 @@
-"""The rule of docs/perf/wheel-ab.md over one row's runs (run.sh row, row-c, row-d), or a smoke's checks.
+"""The rule of docs/perf/wheel-ab.md over one row's runs (run.sh row), or a smoke's checks.
 
 A row's runs (row, row-c) are, in order, the A/A pair and then six pairs AX XA AX XA AX XA, X being B
 or C; pair i gives r_i = X_i / A_i, r is their median, and the A/A band is |A'/A'' - 1|.

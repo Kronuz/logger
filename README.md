@@ -78,7 +78,7 @@ dedup, stacked indentation, and the iTerm2 integration.
 
 Requires a C++20 compiler and CMake 3.14 or newer; it fetches
 [wheel](https://github.com/Kronuz/wheel) (the timer wheel deferred lines wait in),
-[scheduler](https://github.com/Kronuz/scheduler) (for its threadpool's thread),
+[threadpool](https://github.com/Kronuz/threadpool) (the LOG thread's `Thread`),
 term-color, and the header-only cppcodec, and compiles one source file. CI builds
 it on Linux (x86_64, arm64), macOS (arm64, x86_64), and FreeBSD, plus ASan,
 UBSan, and TSan builds.

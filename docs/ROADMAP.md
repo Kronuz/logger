@@ -33,15 +33,15 @@ rests on the interplay of `clears`, the one-shot `clear()` CAS result,
 `atom_cleaned_at`, and double-clean safety. It is correct, and the smoke test
 covers the main cases, but a small change could quietly break the
 silent-on-fast-op invariant. Worth a test that lands a user `clear()` exactly as
-the scheduler fires, plus written invariants.
+the LOG thread fires, plus written invariants.
 
 ## The trace-stub macro clash
 
-stash and scheduler bundle no-op `L_*` stubs
+stash bundles no-op `L_*` stubs
   (`L_EXC`, `L_NOTHING`, `L_DEBUG_HOOK`, `L_CALL`) so they build without a logger.
   The logger's real `L_EXC` collides with the stub; the fix here is a local
   `#undef L_EXC` before the real definition (which is also how Xapiand wires it,
-  so the scheduler's destructor `L_EXC` becomes a real log there too). Cleaner
+  so stash's destructor `L_EXC` becomes a real log there too). Cleaner
   upstream would be to guard those stubs with `#ifndef`, though include order
-  (logger.h pulls scheduler.h before defining its macros) means the consumer
+  (logger.h pulls its dependencies' headers before defining its macros) means the consumer
   still has to undef. Low priority; documented so it is not a surprise.

@@ -4,15 +4,17 @@ Whether logger's scheduling costs less on `wheel::timer_wheel` than on what it r
 each of its three patterns, decided by the rule below (Detent PLAN.md D72, condition 2: the
 replacement is proven better on every current use). The harness is `bench/wheel_ab/`.
 
+Arms (C) and (D) (`bench/wheel_ab/c`, `d`) and `wheel-port.sh` are deleted with the scheduler (D72): their numbers stay in this file and `wheel-port.md`, and the sources in git at logger:dce2538.
+
 ## The two backends
 
-- **(A) logger as it is**, at this branch's base (scheduler pinned at `d57e8fc`). A routine line
+- **(A) logger as it is**, at this branch's base (logger:dce2538). A routine line
   is formatted into its thread's byte queue and published with one store; a deferred line is a
   `Logging` record (`std::make_shared`) referenced from the queue, which the LOG thread files in
   a binary heap by due time; `clear()` is the record's one-shot compare-exchange. The LOG thread
-  sleeps on a condition variable until the earliest due line. Of Kronuz/scheduler, logger uses
-  only `ScheduledTask`'s one-shot cancel and `Thread`; neither the scheduler's stash wheel nor
-  its thread is used (ARCHITECTURE.md).
+  sleeps on a condition variable until the earliest due line. Of the retired Kronuz/scheduler, logger used
+  only `ScheduledTask`'s one-shot cancel and `Thread`; neither its stash wheel nor its thread
+  was used.
 - **(B) a prototype on the wheel**, `wheel::timer_wheel` at `Kronuz/wheel@50665c8`, owned by a
   LOG thread of the prototype's own. A line is a 128-byte record (the 32-byte `timer_entry`,
   state, and the message inline) taken from the logging thread's record pool and handed over
@@ -59,7 +61,7 @@ Decoration on the LOG thread is off (`with_timestamp = false`) on both.
    clear.
 
 A round: each producer runs 10 bursts of 1,024 calls, spinning 5 ms between bursts (as
-`bench/lg.cc` does); then every line leaves the scheduler (written, or cleared and released)
+`bench/lg.cc` does); then every line leaves the logger (written, or cleared and released)
 before the next round. A run is one warm-up round, discarded, then 8 measured rounds (3 for
 pattern 2, whose rounds last a second). A run prints its start, warm-up, timed part and
 teardown.
@@ -78,7 +80,7 @@ Per run, over its measured rounds:
   deadline (its block's start plus its delay; an upper bound on the true lag by at most the
   block's 64 calls). Microseconds.
 - **LOG-thread CPU per call**: the LOG thread's user plus system time (`thread_info`) / calls.
-- **Lines held** (reported, added with (C)): every 1 ms a sampler reads the lines the scheduler
+- **Lines held** (reported, added with (C)): every 1 ms a sampler reads the lines the logger
   holds (filed, cleared or not, as `pending_count()` counts them); its peak, and its integral per
   call in milliseconds, how long a call's line stays filed. For pattern 3 this is how long
   cleared lines stay filed in the wheel against the heap.
@@ -216,7 +218,7 @@ the verdict. Not rerun at 45f98eb; this is from the diff.
 (C) is not no worse than (A): it loses both deferred patterns at every P on producer median
 (+24% to +55%), p99, heap (+80 bytes per line) and fire lag (+1 ms), and in pattern 3 its LOG
 thread falls behind from P = 4. By D72, logger keeps its deferred-line heap, and with it
-`ScheduledTask`'s one-shot cancel and `Thread` from Kronuz/scheduler. A port worth a rerun
+`ScheduledTask`'s one-shot cancel and `Thread` from the retired Kronuz/scheduler. A port worth a rerun
 needs a record within 10% of (A)'s (at most 22 bytes more): the entry and the self-reference
 replacing the `ScheduledTask` base, which such a port drops (its post hand-off union and times),
 instead of sitting beside it, the record reached from its entry by offset rather than an owner

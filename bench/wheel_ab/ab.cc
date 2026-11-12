@@ -1,13 +1,7 @@
 // logger's three scheduling patterns on (A) logger as it is and (B) a prototype on
 // wheel::timer_wheel, one backend per process. docs/perf/wheel-ab.md has the method and the rule.
 //
-// Built as logger_wheel_ab_c (WAB_ARM_C, against bench/wheel_ab/c's copy of logger whose LOG thread
-// files deferred lines in a wheel), its one backend is C, which runs (A)'s calls.
-//
-// Built as logger_wheel_ab_d (WAB_ARM_D, against bench/wheel_ab/d, built by d/CMakeLists.txt), its
-// one backend is D: the same, with a slimmer record.
-//
-// Usage: logger_wheel_ab --backend A|B|C|D --pattern 1|2|3 --producers P [--formatted] [--check]
+// Usage: logger_wheel_ab --backend A|B --pattern 1|2|3 --producers P [--formatted] [--check]
 //                        [--rounds N] [--bursts N] [--pause-ms N]
 // Prints the effective configuration, then one JSON line with the run's metrics. --check also
 // verifies every line was written exactly once, none early, and no cleared line; it exits 1 if not.
@@ -633,13 +627,7 @@ int main(int argc, char** argv) {
 			usage();
 		}
 	}
-#if defined(WAB_ARM_C)
-	const bool backend_ok = cfg.backend == 'C';
-#elif defined(WAB_ARM_D)
-	const bool backend_ok = cfg.backend == 'D';
-#else
 	const bool backend_ok = cfg.backend == 'A' || cfg.backend == 'B';
-#endif
 	if (!backend_ok || cfg.pattern < 1 || cfg.pattern > 3 || cfg.producers < 1
 			|| cfg.producers > 64 || (cfg.formatted && (cfg.pattern != 1 || cfg.check)) || cfg.burst % kBlock != 0) {
 		usage();
@@ -692,7 +680,7 @@ int main(int argc, char** argv) {
 		start_producers<'A'>(ts);   // (C) runs (A)'s calls against its copy of logger
 	}
 	auto pending = [] { return cfg.backend == 'B' ? pending_b() : Logging::pending_count(); };
-	// Lines the scheduler holds over the measured rounds (filed, cancelled or not), every 1 ms: the
+	// Lines the logger holds over the measured rounds (filed, cancelled or not), every 1 ms: the
 	// peak, and the integral (line-milliseconds) per call, i.e. how long a call's line stays filed.
 	std::atomic<bool> sampling{true};
 	double held_ms = 0;

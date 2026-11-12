@@ -976,7 +976,7 @@ struct LogIndent {
 #define L_EMERG(...)   LOG(0, LOG_EMERG, __VA_ARGS__)
 
 // Logs the in-flight exception (std::current_exception) at CRIT, asynchronously.
-// stash/scheduler bundle a no-op `L_EXC` stub so they build without a logger;
+// stash bundles a no-op `L_EXC` stub so they build without a logger;
 // the real one wins here, which is also how Xapiand wires it.
 #undef L_EXC
 #define L_EXC(...) \

@@ -1,7 +1,7 @@
 # The logger's deferred lines on Kronuz/wheel against arm D
 
 The production logger (this branch, deferred lines on a `wheel::timer_wheel` the LOG thread owns)
-against arm D of `docs/perf/wheel-ab.md`, the prototype it ports (`bench/wheel_ab/d/logger.{h,cc}`
+against arm D of `docs/perf/wheel-ab.md`, the prototype it ports (deleted; `bench/wheel_ab/d/logger.{h,cc}`
 at logger:afe86c5). The bar (quest A3, D72, D77): patterns 3 and 2 at P = 1, 4 and 14, none past
 1.10 by the paired statistic of `docs/perf/wheel-ab.md` "Rule for (D)".
 
@@ -11,8 +11,8 @@ median is pattern 2, P = 4 (r 1.013, interval 0.966-1.044).
 
 ## Which arm is which
 
-`docs/perf/wheel-port.sh` runs `bench/wheel_ab`'s harness and `summarize.py --paired` with the
-labels of `run.sh row-d` swapped, because the summary's reference is always labelled A and its
+`docs/perf/wheel-port.sh` (deleted with arm D; in git at logger:67391e6) ran `bench/wheel_ab`'s harness and
+`summarize.py --paired` with the labels of `run.sh row-d` swapped, because the summary's reference is always labelled A and its
 candidate D:
 
 | label | binary | what it is | wheel pin |
@@ -26,7 +26,7 @@ and the harness, workload, process-per-run order (each arm takes each place of t
 order in rotation), warm-up and statistic are those of `wheel-ab.md`'s Arm D rows: 40 rounds a
 row, one warm-up and one measured round per process, r the median over rounds of the within-round
 ratio, a distribution-free 95% interval of the median, w the farther end of A2 / A's interval
-from 1.00. Both arms are built in one `cmake` tree (`bench/wheel_ab/d/CMakeLists.txt`) at the
+from 1.00. Both arms were built in one `cmake` tree (`bench/wheel_ab/d/CMakeLists.txt`) at the
 same commit, with the same compiler, on one host. Because r is the median of the paired ratios,
 it is not the ratio of the printed medians.
 
@@ -83,13 +83,3 @@ has the widest interval (0.919-1.478), and arm D against itself spans 0.734-1.40
 `logger_deferred` (once, in order with its peers, never early, within one tick plus the LOG
 thread's wake) and `logger_deferred_stress` pass in the suite (261112-140315-039e6c) and under TSan
 (261112-140332-797330), at logger:be2106cd8e43.
-
-## Reproduce
-
-```sh
-docs/perf/wheel-port.sh 3 40        # pattern 3 at P = 1, 4, 14
-docs/perf/wheel-port.sh 2 40 1      # pattern 2 at P = 1 (then 4, 14)
-```
-
-Exit 1 when a row's median or p99 r is past 1.10 or its heap past 1.10 times arm D's. Run it in
-`exclusive` jobs; the raw per-run lines and each summary are in `.scratch/wab-d/port-PATTERN-P.log`.

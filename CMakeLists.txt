@@ -160,8 +160,7 @@ if(LOGGER_BUILD_BENCH AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(logger_latency PRIVATE logger)
 endif()
 
-# logger's scheduling on its own queues against a prototype on Kronuz/wheel (opt-in; the library's
-# arms only: the copies in bench/wheel_ab/c and d link the retired scheduler).
+# logger's scheduling on its own queues against a prototype on Kronuz/wheel (opt-in).
 # docs/perf/wheel-ab.md has the method and the rule; bench/wheel_ab/run.sh runs it.
 option(LOGGER_BUILD_WHEEL_AB "Build bench/wheel_ab" OFF)
 if(LOGGER_BUILD_WHEEL_AB AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)

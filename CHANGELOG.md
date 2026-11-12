@@ -15,6 +15,9 @@ Upgrading a pin from before 2026-10-30: [the consumer upgrade note](https://gith
   compares one scripted run with `test/transcript.golden`, the bytes the implementation before the
   producer path changed wrote, in place of `test/frozen`, a copy of that implementation that
   linked the scheduler. It now runs under ThreadSanitizer too.
+- `bench/wheel_ab/c` and `d` (the A/B's copies of the old logger, which linked the scheduler), their
+  `run.sh` modes and `docs/perf/wheel-port.sh` are deleted; the numbers stay in `docs/perf/` and the
+  sources in git at `dce2538`.
 - The batch of due deferred lines is sorted by (due time, call time, filing order) again: the call
   time is the record's one `created_at`, and a 32-bit filing counter on the record breaks ties
   (`sizeof(Logging)` is unchanged). `test/deferred.cc ties` covers lines with one due time and one
