@@ -286,3 +286,44 @@ bound. A metric whose interval straddles 1.10 is reported as straddling (D77). C
 `run.sh check-d` (every line once, none early, no cleared line written, 0 per-thread and 0
 due-order inversions) and `run.sh tsan-d`. Patterns 2 and 3 at P = 1, 4 and 14; pattern 1 has no
 timer in (D), so no rows.
+
+## Verdict D
+
+At logger:8094113, `exclusive`, 40 rounds a row, `summarize.py --paired`. Correctness first:
+`check-d` 261112-071531-bd8c2e and `tsan-d` 261112-071533-689a79 pass (every line once, none
+early, no cleared line written, 0 per-thread and 0 due-order inversions, TSan clean).
+
+r is D / A per round, median over 40, with the 95% interval and the A/A band w beside it. The
+bound is r <= 1.10 for median and p99; heap D 267.7 against 1.10 x A 259.7 holds on every row
+(1.031 times A, as expected). No row is a win and no row is a loss (the median r never reaches
+1.10 + w).
+
+| row | jobs | r median [interval] | r p99 [interval] (w) | no worse than A |
+|---|---|---|---|---|
+| pattern 3, P = 1 | 261112-071159-b0cda2 | 0.978 [0.898-1.042] | **1.469** [1.149-1.582] (0.217) | **no**: p99 |
+| pattern 3, P = 4 | 261112-071201-563e40 | 0.995 [0.969-1.025] | 1.050 [0.890-1.186] (0.131) | yes; p99 straddles 1.10 |
+| pattern 3, P = 14 | 261112-071203-028190 | 0.994 [0.979-1.021] | 0.967 [0.894-1.191] (0.132) | yes; p99 straddles 1.10 |
+| pattern 2, P = 1 | 261112-071206-e00583 | 1.000 [0.956-1.130] | **1.133** [0.982-1.424] (0.293) | **no**: p99, and the median straddles 1.10 |
+| pattern 2, P = 4 | 261112-071208-a53db3 | 1.003 [0.965-1.037] | 0.933 [0.866-1.073] (0.180) | yes |
+| pattern 2, P = 14 | 261112-071210-60b58a | 1.018 [1.004-1.044] | 1.028 [0.895-1.093] (0.145) | yes |
+
+Median cost is equal to (A) on every row (r 0.98 to 1.02): the record is small enough that the
+wheel costs the producers nothing, which is what (C) lacked (r 1.245 median, heap 1.372 at
+pattern 3, P = 1). The two failures are p99 at P = 1. Pattern 3 P = 1 is a clear loss of the
+bound (the whole interval is above 1.10); pattern 2 P = 1 has an interval that straddles it, a
+point estimate 0.033 over, with w 0.293 wider than the effect, so it is not distinguishable from
+(A)'s own noise there.
+
+Outside the Rule, and reported because D72 is about replacing the heap: the wheel's expiry
+granularity shows in the lines' lateness and in the LOG thread's CPU. Lateness p99 (`lag_p99_us`)
+is 1.1 to 1.4 ms with (D) against 0.07 to 0.28 ms in (A) at pattern 2 (r 4.9, 12.8, 19.6), at
+pattern 3 P = 14 6.5 times (13 ms to 85 ms), and 1.1 to 1.4 times at P = 1 and 4. LOG CPU per
+call is 2.6 times (A)'s at pattern 3 P = 14 and 1.26 times at P = 4, and 0.30 to 0.39 times at
+pattern 2 (the wheel does less work than the heap there). None is a Rule metric.
+
+**For the lead:** (D) is no worse than (A) on 4 of 6 deferred rows and loses on two, both at
+P = 1: pattern 3 P = 1 p99 at 1.469 (interval 1.149-1.582, past the 1.10 bound) and pattern 2
+P = 1 p99 at 1.133 (interval 0.982-1.424, straddling it; w 0.293). The medians are equal on all
+six (0.98 to 1.02), and heap is 1.031 times (A) throughout. D72's one mechanism is therefore
+not proven on p99 at P = 1; the owner decides whether to accept those p99 losses (and the
+lateness above) or keep logger's heap.
