@@ -886,7 +886,6 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	static bool later_deferred(const Deferred& a, const Deferred& b) noexcept {
 		return a.due != b.due ? a.due > b.due : a.created > b.created;
 	}
-	static bool earlier_deferred(const Deferred& a, const Deferred& b) noexcept { return later_deferred(b, a); }
 
 	std::mutex mtx;
 	std::condition_variable cv;
@@ -910,6 +909,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 			st_max_pass_ns / 1e6);
 	}
 #endif
+	bool hot = false;                        // LOG thread only: the last passes filed deferred lines
 	std::uint64_t filed = 0;                 // LOG thread only: deferred lines filed so far
 	std::vector<Head> heads;                 // LOG thread only: each queue's next line, during a pass
 	long written = 0;                        // LOG thread only: queued lines written this pass
@@ -1303,7 +1303,9 @@ public:
 				continue;
 			}
 			const auto t = steady_ns(steady_clock::now());
+			const auto filed_before = filed;
 			if (pass(t, t, t)) {
+				hot |= filed != filed_before;
 				continue;   // it wrote or filed lines: look again at once
 			}
 			// Nothing due: sleep until the earliest line it knows of. A producer that queues one due
@@ -1312,7 +1314,10 @@ public:
 			if ((worker_state.load(std::memory_order_relaxed) & kStopping) != 0) {
 				continue;
 			}
-			const auto until = next_due;
+			// After filing lines, sleep at most one tick: more are likely in the queues, and filed late
+			// they would be due already.
+			const auto until = hot ? std::min(next_due, t + kTickNs) : next_due;
+			hot = false;
 			worker_wake.store(until, std::memory_order_relaxed);
 			worker_state.fetch_or(kSleeping, std::memory_order_seq_cst);
 			std::atomic_thread_fence(std::memory_order_seq_cst);
