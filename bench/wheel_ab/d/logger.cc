@@ -893,10 +893,11 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	std::atomic<int> ending{-1};             // finish()'s countdown of passes; -1 until it begins
 	std::atomic<bool> final_done{false};     // the last look at the queues is over
 	// LOG thread only: deferred lines filed in a wheel by due time; a pass takes the due ones into
-	// `batch`, a binary heap by (due, created), and merges it with the queues' lines.
+	// `batch`, sorted by (due, created), and merges it with the queues' lines.
 	std::unique_ptr<wheel::timer_wheel> wheel_ = std::make_unique<wheel::timer_wheel>(
 		static_cast<std::uint64_t>(steady_ns(std::chrono::steady_clock::now())));
 	std::vector<Deferred> batch;
+	std::size_t batch_at = 0;
 	std::int64_t pass_now = std::numeric_limits<std::int64_t>::min();   // during a pass: its `now`
 #ifdef WAB_STATS
 	std::uint64_t st_bypass = 0, st_passes = 0, st_expired = 0, st_filed_wheel = 0;
@@ -1015,11 +1016,11 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 					(pass_now - due) / 1e6);
 			}
 			st_bypass_late_ns += pass_now - due;
-			st_bypass_max_batch = std::max(st_bypass_max_batch, batch.size());
+			st_bypass_max_batch = std::max(st_bypass_max_batch, batch.size() - batch_at);
 #endif
 			Deferred d{due, created, &l};
-			batch.push_back(d);
-			std::push_heap(batch.begin(), batch.end(), later_deferred);
+			batch.insert(std::upper_bound(batch.begin() + static_cast<std::ptrdiff_t>(batch_at), batch.end(), d, earlier_deferred),
+				d);
 			return;
 		}
 		l.fire = [](wheel::timer_entry& e, bool) noexcept {   // the wheel's destruction: release it
@@ -1040,10 +1041,8 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 
 	// Drops cancelled lines from the front of the batch.
 	void purge() {
-		while (!batch.empty() && !*batch.front().record) {
-			batch.front().record->wheel_hold.reset();
-			std::pop_heap(batch.begin(), batch.end(), later_deferred);
-			batch.pop_back();
+		while (batch_at < batch.size() && !*batch[batch_at].record) {
+			batch[batch_at++].record->wheel_hold.reset();
 		}
 	}
 
@@ -1060,12 +1059,13 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 		++st_passes_all;
 #endif
 		batch.clear();
+		batch_at = 0;
 		if (wheel_) {
 			wheel_->expire(static_cast<std::uint64_t>(now), [this](wheel::timer_entry& e) {
 				Logging& l = static_cast<Logging&>(e);
 				batch.push_back({static_cast<std::int64_t>(e.deadline), l.atom_created_at.load().time_since_epoch().count(), &l});
 			});
-			std::make_heap(batch.begin(), batch.end(), later_deferred);
+			std::sort(batch.begin(), batch.end(), earlier_deferred);
 #ifdef WAB_STATS
 			++st_passes;
 			st_expired += batch.size();
@@ -1090,7 +1090,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 		for (;;) {
 			purge();
 			const bool ring = !heads.empty();
-			const bool heap = !batch.empty();
+			const bool heap = batch_at < batch.size();
 			if (!ring && !heap) {
 				break;
 			}
@@ -1098,7 +1098,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 			bool take_ring = ring;
 			if (ring && heap) {
 				const auto& a = heads.front();
-				const auto& d = batch.front();
+				const auto& d = batch[batch_at];
 				take_ring = a.due != d.due ? a.due < d.due : a.created <= d.created;
 			}
 			if (take_ring) {
@@ -1116,9 +1116,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 					}
 				}
 			} else {
-				auto task = std::move(batch.front().record->wheel_hold);
-				std::pop_heap(batch.begin(), batch.end(), later_deferred);
-				batch.pop_back();
+				auto task = std::move(batch[batch_at++].record->wheel_hold);
 				fire(task);
 			}
 		}
@@ -1134,6 +1132,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 			written = 0;
 		}
 		batch.clear();
+		batch_at = 0;
 		pass_now = std::numeric_limits<std::int64_t>::min();
 		next_due = std::min(later_head, wheel_next());
 		return worked;
