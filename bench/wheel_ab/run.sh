@@ -11,6 +11,7 @@
 #   run.sh row-c PATTERN P         one row of A against C (patterns 2 and 3; in pattern 1 C is A)
 #   run.sh sizeof                  sizeof(Logging) of A, C and D (arm D's own build, d/CMakeLists.txt)
 #   run.sh check-d | tsan-d        the same checks for arm (D), which must also keep (A)'s order
+#   run.sh profile-d PATTERN P ARM  a `sample` profile (A or D) of 20 rounds of one process, call tree per thread
 #   run.sh row-d PATTERN P [R]     one row of A against D under D77: R rounds (default 40), each
 #                                  running A, its twin A2 and D once in a rotated order
 set -eu
@@ -176,6 +177,20 @@ tsan-d)
 		done
 	done
 	exit $fail
+	;;
+profile-d)
+	pattern=${2:?pattern}
+	p=${3:?producers}
+	arm=${4:?arm A or D}
+	build_d "$BUILD_D" Release
+	bin=$BUILD_D/logger_wheel_ab
+	[ "$arm" = D ] && bin=$BUILD_D/logger_wheel_ab_d
+	"$bin" --backend "$arm" --pattern "$pattern" --producers "$p" --rounds 20 >"$BUILD_D/profile.out" &
+	pid=$!
+	sleep 1
+	sample $pid 6 1 -wait 2>&1
+	wait $pid || true
+	grep '^{' "$BUILD_D/profile.out" | tail -1
 	;;
 row-d)
 	pattern=${2:?pattern}
