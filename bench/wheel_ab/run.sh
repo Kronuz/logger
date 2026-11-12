@@ -39,8 +39,9 @@ build_d() {  # build_d DIR BUILD_TYPE [extra cmake args]: A, B and D against whe
 	dir=$1
 	type=$2
 	shift 2
-	cmake -S "$HERE/d" -B "$dir" -G Ninja -DCMAKE_BUILD_TYPE="$type" "$@" >/dev/null
-	cmake --build "$dir" >/dev/null
+	mkdir -p "$dir"
+	{ cmake -S "$HERE/d" -B "$dir" -G Ninja -DCMAKE_BUILD_TYPE="$type" "$@" && cmake --build "$dir"; } >"$dir/build.log" 2>&1 \
+		|| { tail -60 "$dir/build.log"; exit 1; }
 }
 
 mode=${1:-}
