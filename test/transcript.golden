@@ -1,0 +1,482 @@
+== levels (8)
+0 PE TS \x1b[0m\x1b[0m\x1b[0mlevel 0 says hello
+1 PE TS \x1b[0m\x1b[0m\x1b[0mlevel 1 says hello
+2 PE TS \x1b[0m\x1b[0m\x1b[0mlevel 2 says hello
+3 PE TS \x1b[0m\x1b[0m\x1b[0mlevel 3 says hello
+4 PE TS \x1b[0m\x1b[0m\x1b[0mlevel 4 says hello
+5 PE TS \x1b[0m\x1b[0m\x1b[0mlevel 5 says hello
+6 PE TS \x1b[0m\x1b[0m\x1b[0mlevel 6 says hello
+7 PE TS \x1b[0m\x1b[0m\x1b[0mlevel 7 says hello
+== formats (24)
+6 PE TS \x1b[0m\x1b[0m\x1b[0mplain message
+6 PE TS \x1b[0m\x1b[0m\x1b[0mbraces {kept} and -42 18446744073709551615
+6 PE TS \x1b[0m\x1b[0m\x1b[0m     -42|18446744073709551615|c string|0003.142|ff|0b101|2.500000e+00
+6 PE TS \x1b[0m\x1b[0m\x1b[0mtrue q c string std string view 0x0 P7 3.14159265358979 2.5
+6 PE TS \x1b[0m\x1b[0m\x1b[0mc string -42 c string 3.14
+6 PE TS \x1b[0m\x1b[0m\x1b[0m{
+6 PE TS \x1b[0m\x1b[0m\x1b[0m{
+6 PE TS \x1b[0m\x1b[0m\x1b[0m{:z} {}
+6 PE TS \x1b[0m\x1b[0m\x1b[0mtoo {} few {}
+6 PE TS \x1b[0m\x1b[0m\x1b[0mstd string
+6 PE TS \x1b[0m\x1b[0m\x1b[0mstd string
+6 PE TS \x1b[0m\x1b[0m\x1b[0mview
+6 PE TS \x1b[0m\x1b[0m\x1b[0m
+6 PE TS \x1b[0m\x1b[0m\x1b[0municode \xc3\xa9\xe2\x82\xac c string \xf0\x9f\x98\x80
+6 PE TS \x1b[0m\x1b[0m\x1b[0mtab\x09here\x0anewline -42
+6 PE TS \x1b[0m\x1b[0m\x1b[0mbig aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...[5032 bytes fnv1a 5f302be56cb2b0c2]
+6 PE TS \x1b[0m\x1b[0m\x1b[0mzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz...[300024 bytes fnv1a 065579083d948a49]
+6 PE TS \x1b[0m\x1b[0m\x1b[0mshort again -42
+5 PE TS \x1b[0m\x1b[0m\x1b[0mnotice 1
+4 PE TS \x1b[0m\x1b[0m\x1b[0mwarning 2
+3 PE TS \x1b[0m\x1b[0m\x1b[0merr 3
+2 PE TS \x1b[0m\x1b[0m\x1b[0mcrit 4
+1 PE TS \x1b[0m\x1b[0m\x1b[0malert 5
+0 PE TS \x1b[0m\x1b[0m\x1b[0memerg 6
+== random (400)
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr0 -7935048500090305.0000         yy
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr1 8662e433 7578213465609952
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr2 pppppppppppppppppppp
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr3 -4860454256051611.0000 uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr4 -7052737244717815.0000 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr5 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr6 -40793122 eeeeeeeeeeeeeeeeeeeeeee
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr7 nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr8 ggggggggggggggggggggggggggggggggggggggggggggggggg
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr9 xxxxxxxxxx
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr10 -516989787 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr11 9048214201538064.0000 qqqqqqqqqq
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr12 6485128188886134.0000 cccccccccccccccccccccccccccccccccccccccccccccccc
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr13 3765073951214021.0000 bbbbbbbbbbbbbbbb
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr14 -229660996 dddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr15 f03e8afe -4242097458551652
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr16 -8999168156857441.0000           
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr17 eeeeeeeeeee
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr18 d9136ce5 -6902288260239704
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr19 iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr20 rrrrrrrrrr
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr21 6041528303755802.0000 uuuuuuuuuuuuuuuuuuuuuuuuuu
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr22 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr23 905c4636 1936793421211098.5
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr24 6e615bc9 6908444493835964
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr25 -106193219 hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr26 8ec7b436 -7353862840003950
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr27 be41703c -5690276421102982
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr28 -7136958416336175.0000       jjjj
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr29 936436a0 -7943410259149667
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr30 e2cdb876 -6221288819384000
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr31 29e034ff 3922896240615344.5
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr32 4774852 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr33 iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr34 pppppppppppppppppppppppppppppppppppppppppp
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr35 pppppppppppppppppppppppppppppppppppppppppppppp
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr36 67e89fc9 7152564643435600
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr37 ab978dfd -5343045263469548
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr38 6952375626004934.0000 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr39 c8d2e988 -2701773553820397.5
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr40 565a3f1d -1760372877106781.8
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr41 b458e175 3210849926171136.5
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr42 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr43 7887237232802563.0000         bb
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr44 -524815263 j
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr45 -6511200866969579.0000        bbb
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr46 -1409771820 ggggggggggggggggggggggggggg
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr47 -9062631573137942.0000 cccccccccccccccccccccccccccccccccccccccc
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr48 -1869436021 sssssssssssss
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr49 1aaa5ea0 225561031013089.16
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr50 vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr51 2057038690 mmmmmmmmmmmm
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr52 d68f8805 6073545548287091
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr53 lllllllllllllll
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr54 -995904747537372.5000 ggggggggggggggggggggggggg
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr55 5513482886844283.0000 ssssssssssssssssssssssssssssssss
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr56 347a03ab -6901266427338536
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr57 694182658 bbbbbbbbbbbbb
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr58 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr59 194256367894892.1875 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr60 1cee97c -6291468325244382
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr61 -1764171199 gggggggggggggggggggggggggggggggggggggg
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr62 679beeff 8992001853446489
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr63 254097010 yyyyyyyy
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr64 -5744179962748217.0000 jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr65 -7352075618607933.0000 vvvvvvvvvvvvvvvvvvvvvv
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr66 fcd2bfcd -5493336291503906
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr67 -2979326617642839.5000 iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr68 2652153640510726.5000 jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr69 -4780379779359751.0000 ggggggggggggggggggggggggggggggggggggg
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr70 1721084445 ccccccccccc
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr71 8cf24396 -8381941355774307
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr72 zzzzzzzzzzzz
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr73 477995911 aaaaaaaaaaaaaaaaaaaaaaaaa
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr74 iiiiiiiiiiii
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr75 pppppppppppppppppppppppppppppp
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr76 c71321c1 1510052650632715
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr77 hhhhhhhhhhhhhhhhhhhhhhhhh
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr78 917983562 gggggggggggggggggggggggggggggggggggggggggggggggg
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr79 5142309409214333.0000 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr80 9017270358089328.0000 iiiiiiiiiiiiiiii
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr81 900984924180085.7500 ttttttttttttttttttttttttttttttttttttttttttttttttttttttttt
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr82 2758285686625007.5000   mmmmmmmm
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr83 -2464463151744724.0000 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr84 -128567752 kkkkkkkkkk
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr85 -715826054 mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr86 2843339956069272.0000 wwwwwwwwwwwwwwwwwwwwwwwwwww
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr87 -643825686 gggggggggggggggggggggggggggggggggggggggggg
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr88 xxxxxx
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr89 44274641 yyyyyyyyyyyyyyyyyyyyyyyyyy
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr90 2cc46446 1088451024567827
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr91 -3946265937479596.5000 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr92 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr93 lllllllllllllllllllllllllllllllllllllllllllll
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr94 f3c575e2 -7565489732907610
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr95 -696686900 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr96 ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr97 e55dfa5f 2223920460669697.8
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr98 -2307231418224697.5000 sssssssssssssssssss
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr99 3d8acf4e 2011862454749909.5
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr100 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr101 8520165639855106.0000 hhhhhhhhhhhhhhhhhh
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr102 bf8d5efd 387825816813260.7
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr103 ebeef50d 6631177784267723
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr104 8386023177540827.0000 llllllllllllllll
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr105 204410454 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr106 -8086255955694246.0000 jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr107 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr108 160e5624 6312608804105420
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr109 7173114259349466.0000 kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr110 1197ec38 5210951928271115
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr111 ggggggggggggggggggggggggggggggggggggg
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr112 fffffffffffffffffffffffffffffffffffffffffff
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr113 hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr114 5873679244611944.0000 lllllllllllllllllllllllllllllllllllllll
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr115 36aec722 -6908771350522447
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr116 -2737623407331063.5000 mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr117 jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr118 -298839210 kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr119 vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr120 ee0e1b94 7907163088056007
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr121 6976751757576280.0000    nnnnnnn
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr122 -3831702968833249.5000 ttttttttttttttttttttttttttttt
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr123 cf87f261 4052791559009434
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr124 -4805313741893112.0000 ttttttttttttttttttttttttttttttttttttttttttttttttttttttt
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr125 1188387635 aaaaaaaaaaaaaaaaaaaaaaaa
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr126 3599025467242992.5000 pppppppppppppppppp
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr127 eeeeeeeeeeeeeeeeeeeeeeeeeeeee
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr128 aaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr129 53cea371 9143784685155240
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr130 tttttttttttttttttttttttttttttttttttttttttttttt
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr131 52f24db -8703790579444756
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr132 nnnnnnnnnnnnnnnnnnnnnnnnnn
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr133 hhhhhh
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr134 1209198736 qqqqqqqqqqqqqqqqqqqq
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr135 1336851208 l
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr136 5078575917345241.0000 llllllllllllllllllllll
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr137 ff5562d3 -3964710587874344.5
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr138 e62ed421 7072044388074622
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr139 cc4cda91 5321892557202295
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr140 1763006320 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr141 57f0b25 1966773506156960.5
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr142 900917585370008.3750 bbbbbbbbbbbbbbbbbbb
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr143 97b70aeb -8522410387676941
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr144 1330526285 ggggggggggggggggg
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr145 rrrrr
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr146 -1678154584 llllll
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr147 xxxxxxxxxxxxxxxx
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr148 n
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr149 -421875908 nnnnnnnnnnnnnnnnnnnnnnn
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr150 320938682 vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr151 ccccccccccccccccccccccccccccccccccc
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr152 -8635743541275584.0000 ooooooooooooooooooooooooooooooooooooooooooooooooooooo
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr153 db596ae7 -7085203172516628
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr154 -7655578451716700.0000    wwwwwww
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr155 5530368423543262.0000 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr156 a8a36005 -4589720907018266
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr157 qqqqqqqqqqqq
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr158 
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr159 713cfa05 8195172036309481
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr160 a6d5c5df 6486643590572571
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr161 2629862219610136.0000 dddddddddddddddddddddddddddddd
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr162 3862744597374957.5000 kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr163 13488953 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr164 71b961f2 -5144472007187468
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr165 uuuuuuuuuuuuuuuuuu
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr166 4f87decf -2105330910543759.2
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr167 -9058651785554280.0000 kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr168 1415530153 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr169 1030516387 w
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr170 1669444881 mmmmmmmmmmmmmmmmmmmmmmmmmm
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr171 sssssssssssssssssssssssssssssssssss
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr172 1662720377 rrrrrrrrrrrrrrrrrrrr
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr173 2680503535794084.0000 qqqqqqqqqqqqqqqqqqqqqqqqqqqq
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr174 -5787420166847957.0000 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr175 e8e5262d 3680703120887786
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr176 2f3fa3b5 8304034242410148
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr177 757700344 kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr178 82835a7d 6970856911045985
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr179 -720173433 ff
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr180 5f50d5af -1804046435421760.8
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr181 c5efd925 3724895468503947.5
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr182 1670084780 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr183 92aa46ae -4670156431269317
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr184 3516166150886713.5000 bbbbbbbbbbbbbbbbbbbbbbbbbb
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr185 -1177987100 hhhhhhhhhhhhhhhhhhhhhh
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr186 -1191776256 ffffffffffffffffffffffffffffffffffffffffffffffffffff
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr187 bb19755a -1226215127291036
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr188 fcbe2be5 5566237626251698
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr189 2096927688504962.2500 pppppppppppppppppppppppppppppppppppppppppppppppppppppppppp
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr190 3022472050406428.0000          x
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr191 13a5d5e3 7488601735089861
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr192 -1592015172 nnnnnnnnnnnnnnnnnnnnnnnnnnnn
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr193 -2143782648860785.2500          u
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr194 ttttttttttttttttttttttttttttttttttttttttttttttttttttttttt
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr195 6d46975 -6957581109392878
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr196 ssssssssssssssssssssssss
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr197 9a1dfdd4 -6907734041206632
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr198 jjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr199 b295e09b -3263477988966967
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr200 6907787960193189.0000 sssssssssssssssssss
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr201 ooooooooooo
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr202 1874123331 iiii
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr203 f64283b3 626235470193209.8
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr204 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr205 -1429861132 hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr206 38be2606 9054907184364794
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr207 -1022281108 kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr208 -1222723745 fffffffffffffffffffffffffffff
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr209 -670302312 mmmmmmmmmmmmmmmm
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr210 -1787803243 qqq
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr211 sssssssssssssssssssssssssssssss
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr212 ab5a9957 3450694743640321
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr213 -2095824613705168.5000 jjjjjjjjjjjjjjjj
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr214 -3887603882080171.5000 jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr215 2878264364788725.0000 lllllllllllllllllllllllllllllllllllllllllllll
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr216 1432834328243102.5000     vvvvvv
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr217 qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr218 -2108686466 q
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr219 4398551026489054.0000 yyyyyyyyyyyy
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr220 ttt
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr221 -6725041313203940.0000 ggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr222 -1088220343 rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr223 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr224 -1946194037 
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr225 4388152087297979.5000 aaaaaaaaaaaaaaaaaaaaaaaaaa
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr226 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr227 cccccccccccccccccccccccc
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr228 -439793529 lllllllllllllllllllllllllllllllllllllllllllll
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr229 -857062815 nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr230 1135346992 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr231 35022160 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr232 8387548384025562.0000 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr233 40431f 4477360557977208
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr234 1806854986 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr235 -6095441148978821.0000 vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr236 4697069571970533.0000 jjjjjjjjjjjjjjjjjjjjjjjjjjj
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr237 ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr238 -1660873940 dddddddddddddddddddddddddd
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr239 iiiiiiiiiiiiiiiiiii
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr240 oooooooooooooooooooooooooooooooooooooooooooooooooooo
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr241 -1000533615 rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr242 1229679518 ddddd
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr243 7285e668 -7600235398557351
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr244 5620459422248336.0000       pppp
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr245 1095977185 ddddddddddddddddddd
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr246 ccccccccccccccccccccccccccccccccccccccccccccccc
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr247 712c985f -2718504419708491
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr248 815df40a -347065497739550.75
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr249 257611776351828.6562 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr250 827326f7 -694382187775371.4
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr251 f710b7af 6783817742699601
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr252 580046480 ttttttttttttttttttttttttttttttttttttttttttttttttttttttt
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr253 -377762120 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr254 e1dbcf23 284007164332340.56
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr255 llllllllllllllllllllll
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr256 ffffffffffffffffffffffffffffffffff
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr257 -705817340 ccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr258 nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr259 c02ca6df -1927972293072242.5
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr260 -823636597 mmmmmmmmmmmmmmmmmmmmmm
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr261 211932173 zzzzzzzzzzzzzzzz
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr262 982410324 ddddddddddddd
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr263 70d5615f 7657586417586883
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr264 d921c99b 359890266822153.2
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr265 2000684324 kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr266 3985757680702532.0000 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr267 -586696176 ggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr268 uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr269 -143015725 nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr270 9264f812 3122821552404018
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr271 -1084437143 ccc
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr272 -1904191997 uuuuuuuuuuuuuuuuuuuuuuuuuuu
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr273 63311264 ffffff
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr274 nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr275 4753722692427579.0000  yyyyyyyyy
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr276 
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr277 bbb4011f 2793666278082923.5
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr278 22492ac -4074029247812567.5
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr279 389bc3a 8274788330530541
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr280 575de284 -4197256737046436
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr281 lllllllllllllllllllllllllllllllllllllllllllllllllllllllllll
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr282 54eaf95c -6039896667935552
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr283 895130917 llllllllllllllll
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr284 4513910508839922.0000 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr285 1122186645 oooooooooooooooooooooo
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr286 aaaaaaaaaaaaaaaaaaaaaaa
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr287 uuuuuuuuuuuuuuuu
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr288 -1984401368 fffffffffffffffffffffffffff
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr289 8bbaad81 8777600971802124
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr290 pppppppppppppp
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr291 e3911b06 6231794797532438
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr292 -8923247590277906.0000 aaaaaaaaaaaaaa
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr293 -798178811 wwwwww
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr294 -3874708314267661.0000        yyy
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr295 eeb0e813 8174839670398914
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr296 -7120604584860586.0000 mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr297 5795225744190525.0000 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr298 4426935790428845.0000   vvvvvvvv
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr299 ec6c095c -2422337413422306.5
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr300 2b64a4ae -6509397212102321
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr301 944997ec 1789994194787571.2
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr302 7545104167507311.0000    jjjjjjj
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr303 c32a41da -8840642781263666
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr304 aaaaaaaaaaaaaaaaaaaaaaaaa
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr305 1838440738 nnnnnnnnnnnnnnnnnnnnnn
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr306 3515102329807605.5000 ttttttttttttttt
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr307 5932f000 -7377183585743483
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr308 -3413440658265984.5000  ttttttttt
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr309 oooooooooooo
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr310 jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr311 324538045 vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr312 -1702166695 sssssss
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr313 tttttt
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr314 5876428081190278.0000 uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr315 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr316 4726829279891732.0000 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr317 3b5e8af8 300247816461027.2
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr318 iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr319 635617615 mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr320 aff2115 -7081931685724869
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr321 4481617914122177.5000 ttttttttttttt
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr322 2042451310 jjjjjjjjjj
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr323 -207191057 llllllllllll
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr324 1304741356 vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr325 1781380622 vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr326 aaaaaaa
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr327 1434696135268184.0000 ffffffffffffffffffffffffffffff
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr328 -714824765 kkkkkkkkkkkkkkkkkkkkkkkkk
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr329 1bef38 5554120926235338
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr330 1166551955 rrrrrrrrrrrrrrrrrr
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr331 oooooooooooooooooooooo
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr332 iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr333 104408278 nnnnnnnnnnnnnnnnnnnnnnnn
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr334 -567410215 oooooooooooooooooooooooooooooooooooooooooooooooooooooo
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr335 lllllllllllllllllllllllllllllllllllllllllllllll
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr336 n
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr337 -1234213904 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr338 853768975 nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr339 -976769900 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr340 -570284441 bbbbbbbbbbbbbbbb
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr341 llllllllllllllllllllllllllllll
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr342 a2d45946 3489577652448416
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr343 rrrrrrrrrrrrrrrrr
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr344 c1718f3 -8608765708885033
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr345 -409734669 uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr346 ac4cb7b4 675346519375259.2
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr347 eeeeeeeeeeeeee
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr348 -632254320 jjjjjjjjjj
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr349 -6703133929131731.0000 fffffffffffffffffffffffffffff
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr350 -6782331813301991.0000 vvvvvvvvvvvvvvvvvvvvvvvvvvv
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr351 6261542113769049.0000 ssssssssssssssssssssssssssssssssss
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr352 49cc7a34 5376930687597221
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr353 64463583 9155345540977722
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr354 3d842ce7 -1062374939883718.2
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr355 4880610197704702.0000       bbbb
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr356 gggggggggggggggggggggggggggggggggggggggggggggggggggggg
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr357 -1448422397 hhhhhhhhhhhhhhhhh
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr358 oooooooooooooooooooooooooooooooooooooooo
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr359 a55d07b6 9227330786475172
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr360 501def0a -3837312198027349
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr361 -555053725 jjjjjjjjjjjjjjjjjjjjjjjjj
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr362 -315006099 uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr363 7a5258f7 9381665375469570
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr364 2697c390 255723937532134.97
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr365 cccccccccccccccccccccccccc
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr366 d88941c6 -8790729327799355
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr367 -567145770 ggggggggggggggggg
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr368 1465361764 fffffffff
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr369 pppppppppppppppppppppppppppppppppp
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr370 hhhhhhhhhhhhhhh
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr371 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr372 6039b905 -1406996632619855.8
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr373 -6641551137493992.0000 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr374 -1625001178 cccccccccccccccccccc
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr375 -3198651641306367.0000          c
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr376 -420333104 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr377 -388231900227430.3125 oooooooooooooooooooooooooooooooooo
+3 PE TS \x1b[0m\x1b[0m\x1b[0mr378 lllllllllllllllllllllllllllllllllllllllllllllll
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr379 536941678 hhhhhhhhhhhhhhhhhhhh
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr380 ad5ad9d0 3098301210517682
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr381 -624533912 jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr382 -604041382 oooooooooooooooooooooooooooooooooooooooo
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr383 2601468243091227.0000     zzzzzz
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr384 944553990316435.3750 dddddddddddddddddddddddddddd
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr385 135952784 aaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr386 344d27d2 -5389750832177063
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr387 7606207878976717.0000 vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr388 3193228876739107.0000 tttttttttttttttttttttttttttttttttttttttttt
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr389 2063595972 mmmmmmmmmmmmmmmmmmmmmm
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr390 1742235646 ppppppppppppppppppppppppppppp
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr391 -2109127901 vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr392 -1383648479 kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr393 611858720 gggggggggggggggggggggggggggggggg
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr394 4904157687897912.0000 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+4 PE TS \x1b[0m\x1b[0m\x1b[0mr395 19757eee -686626441279874.5
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr396 -1175965506846824.5000 llllllllllllllllllllllllllllllllllllllllllllllll
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr397 7333744765939377.0000 hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+5 PE TS \x1b[0m\x1b[0m\x1b[0mr398 -6649437129698956.0000         rr
+6 PE TS \x1b[0m\x1b[0m\x1b[0mr399 -31469500 oooooooooooo
+== decoration (10)
+6 PE TS (worker) transcript.cc:LINE at int main(): \x1b[0m\x1b[0m\x1b[0mwith thread and location
+5 PE TS \x1b[0m\x1b[0m\x1b[0m\x1b[0;94m\x1b[0;38;5;117m\x1b[0;38;2;116;185;255mtinted
+4 PE TS \x1b[0m\x1b[0m\x1b[0m\x1b[0;93m\x1b[0;38;5;215m\x1b[0;38;2;255;177;66mtinted
+6 PE no timestamp
+6 PE TS \x1b[0m\x1b[0m\x1b[0mstacked one
+6 PE TS \x1b[0m\x1b[0m\x1b[0m  indented once
+6 PE TS \x1b[0m\x1b[0m\x1b[0m  stacked two
+6 PE TS \x1b[0m\x1b[0m\x1b[0m    indented twice
+6 PE TS \x1b[0m\x1b[0m\x1b[0m  back to once
+6 PE TS \x1b[0m\x1b[0m\x1b[0mno indent
+== exceptions (2)
+2 PE TS \x1b[0m\x1b[0m\x1b[0mcaught 5: [something failed]
+2 PE TS \x1b[0m\x1b[0m\x1b[0m[something failed]
+== once (3)
+6 PE TS \x1b[0m\x1b[0m\x1b[0monce only
+4 PE TS \x1b[0m\x1b[0m\x1b[0mwarning once 1
+3 PE TS \x1b[0m\x1b[0m\x1b[0merr once
+evaluated 1
+== filter (1)
+4 PE TS \x1b[0m\x1b[0m\x1b[0mkept 1
+== public (5)
+6 PE TS \x1b[0m\x1b[0m\x1b[0mdo_log string
+5 PE TS \x1b[0m\x1b[0m\x1b[0mdo_log full
+4 PE Logging::log inline
+0 -E print 1 two
+0 -E print_msg 3
+clear after fire: 0
+clear after immediate fire: 0
+== deferred (7)
+4 PE TS \x1b[0m\x1b[0m\x1b[0mslow 3
+5 PE TS \x1b[0m\x1b[0m\x1b[0mdone 3
+4 PE TS \x1b[0m\x1b[0m\x1b[0mlate 8
+5 PE TS \x1b[0m\x1b[0m\x1b[0mlater 4
+6 PE TS \x1b[0m\x1b[0m\x1b[0mfirst 5
+5 PE TS \x1b[0m\x1b[0m\x1b[0msecond 5
+5 PE TS \x1b[0m\x1b[0m\x1b[0mkept 6
+== file (597 bytes)
+\x1b[0;38;2;238;82;83m\xe2\x96\x88\x1b[0mTS \x1b[0m\x1b[0;38;2;238;82;83mfile level 0\x0a\x1b[0;38;2;238;82;83m\xe2\x96\x89\x1b[0mTS \x1b[0m\x1b[0;38;2;238;82;83mfile level 1\x0a\x1b[0;38;2;238;82;83m\xe2\x96\x8a\x1b[0mTS \x1b[0m\x1b[0;38;2;238;82;83mfile level 2\x0a\x1b[0;38;2;179;57;57m\xe2\x96\x8b\x1b[0mTS \x1b[0m\x1b[0;38;2;179;57;57mfile level 3\x0a\x1b[0;38;2;255;177;66m\xe2\x96\x8c\x1b[0mTS \x1b[0m\x1b[0;38;2;255;177;66mfile level 4\x0a\x1b[0;38;2;116;185;255m\xe2\x96\x8d\x1b[0mTS \x1b[0m\x1b[0;38;2;116;185;255mfile level 5\x0a\x1b[0;38;2;63;119;179m\xe2\x96\x8e\x1b[0mTS \x1b[0m\x1b[0;38;2;63;119;179mfile level 6\x0a\x1b[0;38;2;105;105;105m\xe2\x96\x8f\x1b[0mTS \x1b[0m\x1b[0;38;2;105;105;105mfile level 7\x0a\x1b[0;34m\xe2\x96\x8e\x1b[0mTS \x1b[0m\x1b[0;34mansi16 1\x0a\xe2\x96\x8eTS never 1\x0a\xe2\x96\x8bTS never 2\x0a
+== after finish (7)
+6 PE TS \x1b[0m\x1b[0m\x1b[0mafter finish 1
+5 PE TS \x1b[0m\x1b[0m\x1b[0mafter finish 2
+3 PE TS \x1b[0m\x1b[0m\x1b[0mafter finish 3
+2 PE TS \x1b[0m\x1b[0m\x1b[0mafter finish 4
+4 PE TS \x1b[0m\x1b[0m\x1b[0mwatchdog 6
+5 PE TS \x1b[0m\x1b[0m\x1b[0mdone 6
+3 PE TS \x1b[0m\x1b[0m\x1b[0mfuture severe line

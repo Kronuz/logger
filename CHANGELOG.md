@@ -5,6 +5,23 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Upgrading a pin from before 2026-10-30: [the consumer upgrade note](https://github.com/Kronuz/cpp-libraries/blob/main/docs/UPGRADING-2026-10.md#logger) lists what changes for callers, how to find affected inputs, the commits not to pin, and the speedup.
 
+## 2026-11-12 (the scheduler link, and review follow-ups)
+
+### Changed
+
+- logger no longer links [Kronuz/scheduler](https://github.com/Kronuz/scheduler); CMake fetches
+  [Kronuz/threadpool](https://github.com/Kronuz/threadpool) (`63e03a5`, the commit the scheduler
+  pinned) for the LOG thread's `Thread`. No file includes a scheduler header. The transcript test
+  compares one scripted run with `test/transcript.golden`, the bytes the implementation before the
+  producer path changed wrote, in place of `test/frozen`, a copy of that implementation that
+  linked the scheduler. It now runs under ThreadSanitizer too.
+- The batch of due deferred lines is sorted by (due time, call time, filing order) again: the call
+  time is the record's one `created_at`, and a 32-bit filing counter on the record breaks ties
+  (`sizeof(Logging)` is unchanged). `test/deferred.cc ties` covers lines with one due time and one
+  call time.
+- `test/deferred.cc` counts a `clear()` that loses to the LOG thread as "written at most once"
+  instead of aborting, so a producer preempted past a line's due time no longer fails the test.
+
 ## 2026-11-12 (deferred lines on Kronuz/wheel)
 
 ### Changed

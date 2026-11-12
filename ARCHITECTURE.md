@@ -131,9 +131,11 @@ itself while filed, because the wheel does not own what it files and a cancelled
 be gone. The one-shot cancel (`created_at`, `cleared_at` and a user cancel's flag) is the record's
 own three atomics.
 
-Each pass calls `expire(now)` and sorts the lines it hands back by (due time, call time), then
-merges that batch with the queues' lines. A line already due when the LOG thread files it skips
-the wheel and is put into the batch in order. A cancelled line stays filed until its slot comes
+Each pass calls `expire(now)` and sorts the lines it hands back by (due time, call time, filing
+order), then merges that batch with the queues' lines. The filing order is a 32-bit counter the
+LOG thread stamps on the record, so two lines of one thread that tie on the first two keys
+come out as they were logged. A line already due when the LOG thread files it skips the wheel and
+is put into the batch in order, by the same key. A cancelled line stays filed until its slot comes
 and is dropped then. The LOG thread sleeps until `next()`, the end of the next occupied slot.
 There is no second timer structure: the queues' merge is a heap of each queue's next line,
 rebuilt every pass, and holds nothing between passes.
@@ -148,14 +150,15 @@ anything a reader can see, and in exchange the LOG thread uses 0.34 to 0.44 time
 when lines are deferred far out, producers pay the same per call (median 0.96 to 1.08 times), and
 a deferred line costs 8 more heap bytes. `test/deferred.cc` holds the bound.
 
-Two rules keep the LOG thread filing lines before they are due, so the batch takes no inserts:
+Two rules keep the LOG thread filing lines before they are due, so the batch rarely takes an
+insert:
 
 1. After a pass that filed lines, it sleeps at most one tick: more are likely in the queues.
 2. A producer whose line is due within 8 ms of the LOG thread's wake wakes it, because a timed
    wait returns late and a line due just after it would otherwise be filed already due.
 
-The LOG thread is a `Thread` from [Kronuz/threadpool](https://github.com/Kronuz/threadpool)
-(fetched through the scheduler's pin).
+The LOG thread is a `Thread` from [Kronuz/threadpool](https://github.com/Kronuz/threadpool),
+which the CMake file fetches at its own pin.
 
 ## The sinks
 

@@ -550,6 +550,7 @@ using LogType = std::shared_ptr<Logging>;
 namespace logger_detail {
 class LogWorker;
 struct Emit;
+struct TestAccess;   // test/deferred.cc: logs a line with a call time of its own
 }
 
 // One log entry kept as a full record: a line the macros' fast path does not take (a deferred or
@@ -560,6 +561,7 @@ struct Emit;
 class Logging : private wheel::timer_entry {
 	friend class Log;
 	friend class logger_detail::LogWorker;
+	friend struct logger_detail::TestAccess;
 
 	// Lines that left the queues and lines dropped, each counter on its own cache line. Producers
 	// count the lines they queue in their own queue's `posted`; the LOG thread (and a full record's
@@ -598,6 +600,7 @@ class Logging : private wheel::timer_entry {
 	// The message that replaces this one when the handle is cleaned (the "swap").
 	std::string unlog_str;
 	int unlog_priority;
+	std::uint32_t wheel_seq = 0;   // while filed: the LOG thread's filing order, the batch's last tie-break
 
 	// Keeps the record alive while it is filed in the LOG thread's wheel (the entry's deadline is
 	// its due time, atom_created_at its call time).

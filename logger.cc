@@ -871,8 +871,9 @@ struct RingRelease {
 class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	struct Deferred {
 		std::int64_t due;
-		std::int64_t created;
-		Logging* record;   // filed: its wheel_hold keeps it alive until it is written or dropped
+		std::int64_t created;   // its call time: the record's atom_created_at
+		std::uint32_t seq;      // the order it was filed in (the record's wheel_seq)
+		Logging* record;        // filed: its wheel_hold keeps it alive until it is written or dropped
 	};
 	// A queue's next line: its key is (due, call time).
 	struct Head {
@@ -884,9 +885,19 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	static bool later(const Head& a, const Head& b) noexcept {
 		return a.due != b.due ? a.due > b.due : a.created > b.created;
 	}
-	// Batch order: the earliest first.
+	// Batch order: the earliest first, by (due, call time, filing order). `seq` wraps; lines that tie on
+	// the first two are filed close together, so the signed difference orders them.
 	static bool earlier_deferred(const Deferred& a, const Deferred& b) noexcept {
-		return a.due != b.due ? a.due < b.due : a.created < b.created;
+		if (a.due != b.due) {
+			return a.due < b.due;
+		}
+		if (a.created != b.created) {
+			return a.created < b.created;
+		}
+		return static_cast<std::int32_t>(a.seq - b.seq) < 0;
+	}
+	static Deferred key_of(Logging& l, std::int64_t due) noexcept {
+		return {due, l.atom_created_at.load().time_since_epoch().count(), l.wheel_seq, &l};
 	}
 
 	std::mutex mtx;
@@ -894,7 +905,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	std::atomic<int> ending{-1};             // finish()'s countdown of passes; -1 until it begins
 	std::atomic<bool> final_done{false};     // the last look at the queues is over
 	// LOG thread only: deferred lines filed in a wheel by due time; a pass takes the due ones into
-	// `batch`, sorted by (due, created), and merges it with the queues' lines.
+	// `batch`, sorted by (due, call time, filing order), and merges it with the queues' lines.
 	std::unique_ptr<wheel::timer_wheel> wheel_ = std::make_unique<wheel::timer_wheel>(
 		static_cast<std::uint64_t>(steady_ns(std::chrono::steady_clock::now())));
 	std::vector<Deferred> batch;
@@ -935,7 +946,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 			if (kind == kRecTask) {
 				auto* t = reinterpret_cast<TaskRecord*>(p);
 				if (t->ordered == 0) {
-					file_deferred(std::move(t->task), t->due, t->created);
+					file_deferred(std::move(t->task), t->due);
 					t->~TaskRecord();
 					g.r += size;
 					continue;
@@ -984,15 +995,16 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	}
 
 	// Files a deferred line in the wheel, or, already due during a pass, straight into its batch.
-	void file_deferred(std::shared_ptr<Logging>&& task, std::int64_t due, std::int64_t created) {
+	void file_deferred(std::shared_ptr<Logging>&& task, std::int64_t due) {
 		++filed;
 		if (!wheel_) {
 			return;   // after the last look: released
 		}
 		Logging& l = *task;
+		l.wheel_seq = static_cast<std::uint32_t>(filed);
 		l.wheel_hold = std::move(task);
 		if (due <= pass_now) {
-			Deferred d{due, created, &l};
+			const Deferred d = key_of(l, due);
 			batch.insert(std::upper_bound(batch.begin() + static_cast<std::ptrdiff_t>(batch_at), batch.end(), d, earlier_deferred),
 				d);
 			return;
@@ -1031,7 +1043,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 		if (wheel_) {
 			wheel_->expire(static_cast<std::uint64_t>(now), [this](wheel::timer_entry& e) {
 				Logging& l = static_cast<Logging&>(e);
-				batch.push_back({static_cast<std::int64_t>(e.deadline), l.atom_created_at.load().time_since_epoch().count(), &l});
+				batch.push_back(key_of(l, static_cast<std::int64_t>(e.deadline)));
 			});
 			std::sort(batch.begin(), batch.end(), earlier_deferred);
 		}

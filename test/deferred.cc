@@ -4,6 +4,7 @@
 //   logger_deferred_test           one producer: exactly once, order, never early, lateness bound
 //   logger_deferred_test stress    8 producers, cancelled and ring lines mixed in: exactly once,
 //                                  none cancelled written, never early, each thread's order
+//   logger_deferred_test ties      lines with one due time and one call time: written in filing order
 //
 // Order oracle (the contract, as test/order.cc): for lines i < j of one thread (i logged first) with
 // due_i <= due_j, i is written before j. Due is the `wakeup` handed to do_log.
@@ -17,12 +18,13 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <memory>
 #include <mutex>
 #include <random>
+#include <source_location>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "logger.h"
@@ -77,10 +79,21 @@ static std::pair<int, int> parse(const std::string& s) {
 	return {std::atoi(s.c_str() + t + 1), std::atoi(s.c_str() + h + 1)};
 }
 
+// A line as logged. `cancelled`: its handle's clear() won, so it is never written. `unsure`: clear() lost
+// to the LOG thread, which may or may not have written it by then (a user clear() that lands before
+// the LOG thread's last look at the line still drops it): written at most once, never early.
 struct Line {
 	std::int64_t due;
-	bool cancelled;
+	bool cancelled = false;
+	bool unsure = false;
+	bool required() const { return !cancelled && !unsure; }   // written exactly once
 };
+
+// Cancels `h`, a line logged before its due time, and notes how it went.
+static void cancel(Log& h, Line& line) {
+	line.cancelled = h.clear();
+	line.unsure = !line.cancelled;
+}
 
 // How late a timed wait returns: {median, p99} in ns over `n` waits of 1 to 4 ms.
 static std::pair<std::int64_t, std::int64_t> timed_wake(int n) {
@@ -99,10 +112,38 @@ static std::pair<std::int64_t, std::int64_t> timed_wake(int n) {
 	return {late[late.size() / 2], late[late.size() * 99 / 100]};
 }
 
-// Waits until `n` lines were written (or 10 s), then a little more for any line written twice.
-static void await(Capture* c, std::size_t n) {
+// Waits until every required line was written (or 10 s), then a little more for any line written twice.
+static void await(Capture* c, const std::vector<std::vector<Line>>& logged) {
 	const auto end = clk::now() + 10s;
-	while (c->size() < n && clk::now() < end) {
+	for (;;) {
+		{
+			std::lock_guard l(c->m);
+			std::vector<std::vector<char>> seen(logged.size());
+			for (std::size_t t = 0; t < logged.size(); ++t) {
+				seen[t].assign(logged[t].size(), 0);
+			}
+			for (const auto& line : c->lines) {
+				auto [t, i] = parse(line.first);
+				if (t >= 0 && static_cast<std::size_t>(t) < logged.size() && i >= 0 && static_cast<std::size_t>(i) < logged[t].size()) {
+					seen[t][i] = 1;
+				}
+			}
+			bool all = true;
+			for (std::size_t t = 0; t < logged.size() && all; ++t) {
+				for (std::size_t i = 0; i < logged[t].size(); ++i) {
+					if (logged[t][i].required() && !seen[t][i]) {
+						all = false;
+						break;
+					}
+				}
+			}
+			if (all) {
+				break;
+			}
+		}
+		if (clk::now() >= end) {
+			break;
+		}
 		std::this_thread::sleep_for(1ms);
 	}
 	std::this_thread::sleep_for(30ms);
@@ -124,7 +165,7 @@ static std::vector<std::int64_t> verify(Capture* c, const std::vector<std::vecto
 		CHECK(t >= 0 && static_cast<std::size_t>(t) < logged.size());
 		CHECK(i >= 0 && static_cast<std::size_t>(i) < logged[t].size());
 		const Line& line = logged[t][i];
-		CHECK(!line.cancelled);                          // a cancelled line is never written
+		CHECK(!line.cancelled);                          // a line whose clear() won is never written
 		CHECK(++seen[t][i] == 1);                        // nor any line twice
 		CHECK(c->lines[k].second >= line.due);           // nor before its due time
 		late.push_back(c->lines[k].second - line.due);
@@ -134,12 +175,12 @@ static std::vector<std::int64_t> verify(Capture* c, const std::vector<std::vecto
 	for (std::size_t t = 0; t < logged.size(); ++t) {
 		const auto& ls = logged[t];
 		for (std::size_t i = 0; i < ls.size(); ++i) {
-			CHECK(ls[i].cancelled || seen[t][i] == 1);   // every other line once
-			if (ls[i].cancelled) {
+			CHECK(!ls[i].required() || seen[t][i] == 1);   // every required line once
+			if (!ls[i].required()) {
 				continue;
 			}
 			for (std::size_t j = i + 1; j < ls.size(); ++j) {
-				if (!ls[j].cancelled && ls[i].due <= ls[j].due) {
+				if (ls[j].required() && ls[i].due <= ls[j].due) {
 					CHECK(pos[t][i] < pos[t][j]);
 					++pairs;
 				}
@@ -150,7 +191,8 @@ static std::vector<std::int64_t> verify(Capture* c, const std::vector<std::vecto
 	return late;
 }
 
-// One producer: lines due 2 to 60 ms out, runs of three sharing one due time, a fifth cancelled.
+// One producer: lines due 2 to 60 ms out, runs of three sharing one due time, a fifth cancelled
+// (a clear() that loses to the LOG thread leaves the line written at most once).
 static void single(Capture* c) {
 	const auto [wake_med, wake_p99] = timed_wake(200);
 	std::printf("timed wake: median %.3f ms, p99 %.3f ms\n", wake_med / 1e6, wake_p99 / 1e6);
@@ -159,28 +201,31 @@ static void single(Capture* c) {
 	constexpr int kLines = 600;
 	std::vector<std::vector<Line>> logged(1);
 	std::vector<Log> kept;
-	std::size_t expect = 0;
 	clk::time_point wakeup;
 	for (int i = 0; i < kLines; ++i) {
 		if (i % 3 == 0) {   // a new due time; the next two lines share it
 			wakeup = clk::now() + std::chrono::microseconds(2000 + rng() % 58000);
 		}
-		const bool cancel = rng() % 5 == 0;
-		auto h = Logging::do_log(cancel, wakeup, true, LOG_INFO, "t0#" + std::to_string(i));
-		if (cancel) {
-			CHECK(h.clear());   // before its due time: it never fires
+		const bool want_cancel = rng() % 5 == 0;
+		auto h = Logging::do_log(want_cancel, wakeup, true, LOG_INFO, "t0#" + std::to_string(i));
+		Line line{ns(wakeup)};
+		if (want_cancel) {
+			cancel(h, line);
 		} else {
 			kept.push_back(std::move(h));
-			++expect;
 		}
-		logged[0].push_back({ns(wakeup), cancel});
+		logged[0].push_back(line);
 		if (rng() % 4 == 0) {
 			std::this_thread::sleep_for(std::chrono::microseconds(rng() % 1500));
 		}
 	}
-	await(c, expect);
+	await(c, logged);
 	auto late = verify(c, logged);
-	CHECK(late.size() == expect);
+	std::size_t expect = 0;
+	for (const auto& line : logged[0]) {
+		expect += line.required();
+	}
+	CHECK(late.size() >= expect);
 	std::sort(late.begin(), late.end());
 	const auto med = late[late.size() / 2], p99 = late[late.size() * 99 / 100], max = late.back();
 	std::printf("lateness: min %.3f ms, median %.3f ms, p99 %.3f ms, max %.3f ms\n", late.front() / 1e6,
@@ -196,7 +241,6 @@ static void single(Capture* c) {
 static void stress(Capture* c) {
 	constexpr int kThreads = 8, kLines = 3000;
 	std::vector<std::vector<Line>> logged(kThreads);
-	std::atomic<std::size_t> expect{0};
 	std::atomic<int> logging{kThreads};
 	std::atomic<bool> release{false};   // handles keep their lines pending: kept until all are written
 	std::vector<std::thread> threads;
@@ -209,17 +253,17 @@ static void stress(Capture* c) {
 			mine.reserve(kLines);
 			for (int i = 0; i < kLines; ++i) {
 				const auto delay = std::chrono::microseconds(delay_us[rng() % std::size(delay_us)] + rng() % 200);
-				const bool cancel = delay >= 2ms && rng() % 4 == 0;
+				const bool want_cancel = delay >= 2ms && rng() % 4 == 0;
 				const auto wakeup = clk::now() + delay;
-				auto h = Logging::do_log(cancel, wakeup, true, LOG_INFO,
+				auto h = Logging::do_log(want_cancel, wakeup, true, LOG_INFO,
 					"t" + std::to_string(t) + "#" + std::to_string(i));
-				if (cancel) {
-					CHECK(h.clear());
+				Line line{ns(wakeup)};
+				if (want_cancel) {
+					cancel(h, line);
 				} else {
 					kept.push_back(std::move(h));
-					expect.fetch_add(1);
 				}
-				mine.push_back({ns(wakeup), cancel});
+				mine.push_back(line);
 				if (rng() % 64 == 0) {
 					std::this_thread::sleep_for(std::chrono::microseconds(rng() % 2000));
 				}
@@ -233,7 +277,7 @@ static void stress(Capture* c) {
 	while (logging.load() != 0) {
 		std::this_thread::sleep_for(1ms);
 	}
-	await(c, expect.load());
+	await(c, logged);
 	release = true;
 	for (auto& th : threads) {
 		th.join();
@@ -241,8 +285,36 @@ static void stress(Capture* c) {
 	verify(c, logged);
 }
 
+// `ties` logs lines with a call time of its own choosing: the macros and do_log take it from the clock,
+// and no two calls read the same instant.
+struct logger_detail::TestAccess {
+	template <typename... A>
+	static Log add(A&&... a) { return Logging::add(std::forward<A>(a)...); }
+};
+
+// Lines that tie on due time and call time are written in the order they were logged: 20 rounds of 200
+// lines, each round with one due time and one call time (so the batch is sorted on its last tie-break).
+static void ties(Capture* c) {
+	constexpr int kRounds = 20, kLines = 200;
+	std::vector<std::vector<Line>> logged(1);
+	std::vector<Log> kept;
+	for (int r = 0; r < kRounds; ++r) {
+		const auto now = clk::now();
+		const auto wakeup = now + 15ms + std::chrono::milliseconds(r);
+		for (int i = 0; i < kLines; ++i) {
+			kept.push_back(logger_detail::TestAccess::add(wakeup, "t0#" + std::to_string(logged[0].size()), false, true, true, 0, LOG_INFO,
+				nullptr, std::source_location{}, now, std::chrono::system_clock::now(), now));
+			logged[0].push_back({ns(wakeup)});
+		}
+		std::this_thread::sleep_for(1ms);
+	}
+	await(c, logged);
+	verify(c, logged);
+}
+
 int main(int argc, char** argv) {
-	const bool stressed = argc > 1 && std::strcmp(argv[1], "stress") == 0;
+	const std::string mode = argc > 1 ? argv[1] : "";
+	const bool stressed = mode == "stress";
 	auto cap = std::make_unique<Capture>();
 	Capture* c = cap.get();
 	Logging::handlers.clear();
@@ -257,6 +329,8 @@ int main(int argc, char** argv) {
 
 	if (stressed) {
 		stress(c);
+	} else if (mode == "ties") {
+		ties(c);
 	} else {
 		single(c);
 	}

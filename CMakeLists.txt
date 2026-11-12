@@ -12,16 +12,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(wheel)
 
-# scheduler: its threadpool's Thread runs the LOG thread; the frozen copy in test/frozen
-# uses the scheduler itself. The richer host-specific bits (exception describe, real
-# backtraces, named threads) come in through hooks with std defaults, so a consumer
-# re-injects them via an adapter.
+# threadpool: its Thread runs the LOG thread (the richer host-specific bits -- exception describe,
+# real backtraces, named threads -- come in through hooks with std defaults, so a consumer
+# re-injects them via an adapter).
 FetchContent_Declare(
-  scheduler
-  GIT_REPOSITORY https://github.com/Kronuz/scheduler.git
-  GIT_TAG        d57e8fc051097d84500b4036b85daadd00c00b14
+  threadpool
+  GIT_REPOSITORY https://github.com/Kronuz/threadpool.git
+  GIT_TAG        63e03a5deca9c91f08755d900c61885dd5e75822
 )
-FetchContent_MakeAvailable(scheduler)
+FetchContent_MakeAvailable(threadpool)
 
 # term-color: the compile-time stacked color palette (rgb()/CLEAR_COLOR) plus the
 # runtime resolution layer (collapse / detect_depth / apply). The logger uses it for
@@ -51,7 +50,7 @@ add_library(logger STATIC logger.cc)
 target_include_directories(logger PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(logger PRIVATE "${cppcodec_SOURCE_DIR}")
 target_compile_features(logger PUBLIC cxx_std_20)
-target_link_libraries(logger PUBLIC scheduler::scheduler term_color::term_color wheel::wheel)
+target_link_libraries(logger PUBLIC threadpool::threadpool term_color::term_color wheel::wheel)
 add_library(logger::logger ALIAS logger)
 
 # Build the smoke test only when this repo is the top-level project, so
@@ -101,6 +100,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_test(NAME logger_deferred COMMAND logger_deferred_test)
   set_tests_properties(logger_deferred PROPERTIES RUN_SERIAL TRUE)   # a lateness bound
   add_test(NAME logger_deferred_stress COMMAND logger_deferred_test stress)
+  add_test(NAME logger_deferred_ties COMMAND logger_deferred_test ties)
 
   # How soon a routine line is written: at once when nothing is pending, in the 1 ms batch otherwise.
   add_executable(logger_wake_test test/wake.cc)
@@ -116,24 +116,13 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_test(NAME logger_queue COMMAND logger_queue_test)
   set_tests_properties(logger_queue PROPERTIES TIMEOUT 600)
 
-  # Differential test: one scripted run, built against the library and against the frozen copy
-  # of the implementation before the producer path changed (test/frozen), must write identical bytes.
-  # The frozen copy publishes `Logging::config` to the LOG thread with relaxed counters, so the
-  # test's own configuration writes race there by construction: ThreadSanitizer builds skip it
-  # (CI passes the flags through the per-config and linker variables).
-  string(TOUPPER "${CMAKE_BUILD_TYPE}" LOGGER_BUILD_TYPE)
-  set(LOGGER_ALL_FLAGS "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${LOGGER_BUILD_TYPE}} ${CMAKE_EXE_LINKER_FLAGS}")
-  if(NOT LOGGER_ALL_FLAGS MATCHES "-fsanitize=thread")
-    add_executable(logger_transcript_new test/transcript.cc)
-    target_link_libraries(logger_transcript_new PRIVATE logger)
-    add_executable(logger_transcript_old test/transcript.cc test/frozen/logger.cc)
-    target_include_directories(logger_transcript_old BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/test/frozen")
-    target_include_directories(logger_transcript_old PRIVATE "${cppcodec_SOURCE_DIR}")
-    target_link_libraries(logger_transcript_old PRIVATE scheduler::scheduler term_color::term_color)
-    add_test(NAME logger_transcript
-      COMMAND "${CMAKE_COMMAND}" -DNEW=$<TARGET_FILE:logger_transcript_new> -DOLD=$<TARGET_FILE:logger_transcript_old>
-        -DDIR=${CMAKE_CURRENT_BINARY_DIR}/transcript -P "${CMAKE_CURRENT_SOURCE_DIR}/test/transcript.cmake")
-  endif()
+  # One scripted run must write the golden bytes (test/transcript.golden), which the implementation
+  # before the producer path changed wrote: the path may change, never what is written.
+  add_executable(logger_transcript test/transcript.cc)
+  target_link_libraries(logger_transcript PRIVATE logger)
+  add_test(NAME logger_transcript
+    COMMAND "${CMAKE_COMMAND}" -DEXE=$<TARGET_FILE:logger_transcript> -DGOLDEN=${CMAKE_CURRENT_SOURCE_DIR}/test/transcript.golden
+      -DDIR=${CMAKE_CURRENT_BINARY_DIR}/transcript -P "${CMAKE_CURRENT_SOURCE_DIR}/test/transcript.cmake")
 endif()
 
 # Producer-cost benchmark (opt-in): fetches fmt for the synchronous comparator, and with
@@ -171,28 +160,17 @@ if(LOGGER_BUILD_BENCH AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(logger_latency PRIVATE logger)
 endif()
 
-# logger's scheduling on its own queues against a prototype on Kronuz/wheel (opt-in).
+# logger's scheduling on its own queues against a prototype on Kronuz/wheel (opt-in; the library's
+# arms only: the copies in bench/wheel_ab/c and d link the retired scheduler).
 # docs/perf/wheel-ab.md has the method and the rule; bench/wheel_ab/run.sh runs it.
 option(LOGGER_BUILD_WHEEL_AB "Build bench/wheel_ab" OFF)
 if(LOGGER_BUILD_WHEEL_AB AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_executable(logger_wheel_ab bench/wheel_ab/ab.cc)
   target_link_libraries(logger_wheel_ab PRIVATE logger wheel::wheel)
-  # Arm (C): bench/wheel_ab/c's copy of logger, whose LOG thread files deferred lines in a wheel it
-  # owns instead of its heap; the harness runs (A)'s calls against it.
-  add_executable(logger_wheel_ab_c bench/wheel_ab/ab.cc bench/wheel_ab/c/logger.cc)
-  target_include_directories(logger_wheel_ab_c BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/bench/wheel_ab/c")
-  target_include_directories(logger_wheel_ab_c PRIVATE "${cppcodec_SOURCE_DIR}")
-  target_compile_features(logger_wheel_ab_c PRIVATE cxx_std_20)
-  target_compile_definitions(logger_wheel_ab_c PRIVATE WAB_ARM_C)
-  target_link_libraries(logger_wheel_ab_c PRIVATE scheduler::scheduler term_color::term_color wheel::wheel)
-  foreach(backend A B C)
-    set(bin logger_wheel_ab)
-    if(backend STREQUAL C)
-      set(bin logger_wheel_ab_c)
-    endif()
+  foreach(backend A B)
     foreach(pattern 1 2 3)
       add_test(NAME logger_wheel_ab_check_${backend}${pattern}
-        COMMAND ${bin} --backend ${backend} --pattern ${pattern} --producers 4 --check --rounds 1 --bursts 3)
+        COMMAND logger_wheel_ab --backend ${backend} --pattern ${pattern} --producers 4 --check --rounds 1 --bursts 3)
     endforeach()
   endforeach()
 endif()

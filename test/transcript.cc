@@ -1,14 +1,17 @@
-// A scripted run of the logger that prints every byte its sinks receive. The same source is built
-// against the library and against the frozen copy of the old implementation (test/frozen), and
-// test/transcript.cmake requires the two outputs to be identical: the producer path may change
+// A scripted run of the logger that prints every byte its sinks receive (a very long line as its head,
+// its length and a hash). test/transcript.cmake requires the output to match test/transcript.golden,
+// which the implementation before the producer path changed wrote byte for byte: the logger may change
 // how a line travels to the LOG thread, never what is written.
 //
 // Everything is deterministic: one producer thread, a fixed timestamp, thread name and exception
 // description, seeded random values, and a wait for the LOG thread to go idle between steps whose
 // order would otherwise depend on timing (an inline line against an async one).
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <fstream>
 #include <iterator>
@@ -39,6 +42,15 @@ struct Tape : Logger {
 				out += b;
 			}
 		}
+		if (out.size() > 2048) {   // a long line is kept as its head, its length and a hash of all of it
+			std::uint64_t h = 0xcbf29ce484222325ull;
+			for (unsigned char c : out) {
+				h = (h ^ c) * 0x100000001b3ull;
+			}
+			char tail[64];
+			std::snprintf(tail, sizeof tail, "...[%zu bytes fnv1a %016llx]", out.size(), static_cast<unsigned long long>(h));
+			out = out.substr(0, 64) + tail;
+		}
 		return out;
 	}
 	// A line written 100 ms or more after it was logged ends with its age (" ~129.9ms"). Whether a line
@@ -62,13 +74,26 @@ struct Tape : Logger {
 		}
 		return s;
 	}
+	// The call site as the compiler gave it depends on the build directory and the line moves with edits:
+	// the file's name and "LINE" stand for them once the line is the one `located_line` names.
+	std::atomic<int> located_line{0};
+	std::string without_dirs(std::string s) const {
+		const int line = located_line;
+		const auto at = s.find("transcript.cc:" + std::to_string(line) + " ");
+		if (line != 0 && at != std::string::npos) {
+			const auto from = s.rfind(' ', at);
+			const auto begin = from == std::string::npos ? 0 : from + 1;
+			s.replace(begin, at + std::strlen("transcript.cc:") + std::to_string(line).size() - begin, "transcript.cc:LINE");
+		}
+		return s;
+	}
 	bool late_annotated = false;
 	void log(int priority, std::string_view s, bool with_priority, bool with_endl) override {
 		std::lock_guard<std::mutex> l(m);
 		if (s.find("late 8") != std::string_view::npos && has_age(std::string(s))) {
 			late_annotated = true;
 		}
-		rows.push_back(std::to_string(priority) + (with_priority ? " P" : " -") + (with_endl ? "E " : "- ") + escape(without_age(std::string(s))));
+		rows.push_back(std::to_string(priority) + (with_priority ? " P" : " -") + (with_endl ? "E " : "- ") + escape(without_dirs(without_age(std::string(s)))));
 	}
 };
 
@@ -220,6 +245,7 @@ int main() {
 	{
 		Logging::config.with_threads = true;
 		Logging::config.with_location = true;
+		tape->located_line = __LINE__ + 1;
 		L_INFO("with thread and location");
 		settle();
 		Logging::config.with_threads = false;

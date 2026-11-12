@@ -1,11 +1,11 @@
 // Smoke test for the logger library — Phases 1 through 3.
 //
 // Phase 1 (immediate fan-out): emit on the calling thread through a file sink.
-// Phase 2 (scheduler routing): the three paths and the cancel/swap mechanism.
+// Phase 2 (LOG thread routing): the three paths and the cancel/swap mechanism.
 // Phase 3 (richness): exception decoration, `once` dedup, backpressure drops.
 //
 // Uses CHECK (not assert) so the test verifies even in NDEBUG/Release builds.
-// The scheduler is timing-based, so the test uses generous windows and never
+// The LOG thread is timing-based, so the test uses generous windows and never
 // asserts tight races.
 //
 // Build: cmake -B build && cmake --build build && ctest --test-dir build
@@ -64,7 +64,7 @@ int main() {
 	Logging::log(LOG_WARNING, "IMMEDIATE_MARKER");
 
 	// --- Refusals past the horizon, before anything is scheduled ---------
-	// Past the scheduler's 24 h horizon every kind is refused while it runs. A
+	// Past the 24 h horizon every kind is refused while it runs. A
 	// watchdog for fast work is discarded like a cancelled one; a severe deferred
 	// line is written now; a routine deferred line that does not clear is lost.
 	{
@@ -159,7 +159,7 @@ int main() {
 	std::this_thread::sleep_for(300ms);  // let async/deferred lines fire
 	Logging::finish();                   // drain + join the LOG thread
 
-	// After shutdown the scheduler refuses new lines, by kind. Async ones are due,
+	// After shutdown the logger refuses queued lines, by kind. Async ones are due,
 	// so they are written inline, routine or not; a severe deferred one is written
 	// now; a routine deferred one that does not clear is lost.
 	auto p_finish = Logging::pending_count();
