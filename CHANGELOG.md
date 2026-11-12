@@ -17,7 +17,8 @@ Upgrading a pin from before 2026-10-30: [the consumer upgrade note](https://gith
   whose line is due within 8 ms of the LOG thread's wake wakes it, so lines are filed before they
   are due. A deferred line is never written early and is written by the end of its 1 ms slot plus
   the LOG thread's wake: about 1 ms later than the heap wrote it. `sizeof(Logging)` is 192 bytes
-  (184 before). Producer cost, heap and LOG CPU are in `docs/perf/wheel-port.md`.
+  (184 before). Against the prototype it ports, producer median r is 0.987 to 1.013, p99 r 0.979 to
+  1.036 and heap identical on all six rows (`docs/perf/wheel-port.md`).
 - `logger.h` includes threadpool's `thread.hh` instead of `scheduler.h`.
 
 ## 2026-11-01 (per-thread queues)
