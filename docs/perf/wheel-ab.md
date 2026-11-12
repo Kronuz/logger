@@ -113,4 +113,108 @@ A rule changed after data is a Decisions row, and every row reruns under it.
 
 ## Verdict
 
-Pending the rows.
+**Logger stays on its own queues and heap for every pattern.** (B) wins patterns 2 and 3 on
+producer cost but loses pattern 1 and breaks logger's ordering, so it cannot ship; (C), the shape
+that would ship, loses patterns 2 and 3 to (A) at every P. Every row is an `exclusive` job on an
+Intel i9-9980HK (16 threads), macOS 15.8.1, Apple clang 17, `Kronuz/wheel@50665c8`; r is the
+median of six paired ratios, w the A/A band, both from `run.sh row` / `row-c`.
+
+### (A) against (B), at logger:91924df
+
+| Pattern, P | median ns A / B | r (w) | p99 r (w) | heap B/call A / B | lag p99 us A / B | LOG CPU r | verdict | job |
+|---|---|---|---|---|---|---|---|---|
+| 1, P=1 | 39.1 / 69.7 | 1.844 (0.103) | 2.707 (0.161) | 0 / 0 | 1,439 / 2,539 | 1.26 | loss | 261112-035007-2f8fd3 |
+| 1, P=4 | 42.7 / 65.7 | 1.522 (0.016) | 1.544 (0.218) | 0 / 0 | 1,698 / 2,662 | 1.12 | loss | 261112-035011-fbe2f5 |
+| 1, P=14 | 54.1 / 73.0 | 1.357 (0.004) | 2.986 (0.230) | 0.6 / 0 | 5,258 / 3,966 | 0.84 | loss | 261112-035015-2210ff |
+| 1, P=1, formatted | 62.5 / 115.2 | 1.822 (0.001) | 2.314 (0.529) | 1.6 / 0 | n/a | 1.55 | loss | 261112-035041-cd1116 |
+| 2, P=1 | 175.5 / 112.9 | 0.638 (0.064) | 0.705 (0.654) | 225 / 48 | 247 / 1,130 | 0.31 | win | 261112-035018-1410b6 |
+| 2, P=4 | 170.2 / 117.1 | 0.688 (0.125) | 0.818 (0.098) | 225 / 48 | 112 / 1,349 | 0.28 | win | 261112-035022-b1f5a9 |
+| 2, P=14 | 246.1 / 143.2 | 0.581 (0.030) | 0.543 (0.038) | 225 / 48 | 62 / 1,150 | 0.24 | win | 261112-035026-0fd817 |
+| 3, P=1 | 220.8 / 72.6 | 0.346 (0.016) | 0.757 (0.283) | 215 / 0.5 | 5,164 / 5,811 | 0.46 | win | 261112-035030-378568 |
+| 3, P=4 | 230.0 / 67.2 | 0.292 (0.055) | 0.615 (0.075) | 215 / 0.5 | 6,082 / 6,806 | 0.35 | win | 261112-035034-adfe40 |
+| 3, P=14 | 294.9 / 76.8 | 0.257 (0.018) | 0.376 (0.041) | 215 / 0.5 | 9,693 / 10,817 | 0.36 | win | 261112-035037-bda2f7 |
+
+- **Pattern 1: wheel loss** at every P. The wheel puts 19 to 31 ns on each immediate call (an
+  `arm_remote` and a record from the pool where (A) writes its byte queue and publishes it with one
+  store), and its fire lag p99 is 1.5 to 1.8 times (A)'s at P = 1 and 4. In a whole formatted call
+  (62.5 ns on (A)) the wheel adds 53 ns.
+- **Patterns 2 and 3: wheel win** by the rule at every P, with p99 and heap far inside their
+  bounds. Called out beyond their bands: fire lag p99 in pattern 2 is 4.5, 12 and 19 times (A)'s
+  (1.1 to 1.35 ms against 0.06 to 0.25 ms, the wheel's 1 ms slot), and 1.16 times at pattern 3,
+  P = 1.
+- **(B) does not keep logger's order**, which the rule reports but does not gate on (B): its check
+  counts 23,574 to 109,949 per-thread inversions of immediate lines, and 19,201 / 101,159 / 390,867
+  due-order inversions of 30,720 / 122,880 / 430,080 deferred lines at P = 1 / 4 / 14
+  (261112-040502-859c44). Lines from one thread land in different stripes' order, and a slot's
+  lines come back in filing order, not due order. Shipping (B) changes what users read.
+- **What (B) needed that the wheel lacks**: a caller-owned 128-byte record per line, kept alive
+  until it fires (a per-thread pool and a Treiber stack to return records), because the wheel
+  holds only an intrusive entry; a cancel flag the fire checks, because a worker cannot cancel an
+  entry on the owner's wheel (no remote cancel), so a cleared line stays filed until its deadline;
+  a `seq_cst` fence after `arm_remote` (its CAS is release) for the sleep handshake; and any
+  ordering within a slot or across producers, which it does not have. Its pattern 2 and 3 wins come
+  from that pooled 48-byte path against (A)'s `make_shared` record per deferred line, not from the
+  wheel's filing: (C) below files in the same wheel and loses.
+
+### (A) against (C), at logger:ef0bb6b
+
+| Pattern, P | median ns A / C | r (w) | p99 r (w) | heap B/call A / C | lag p99 us A / C | LOG CPU r | held ms/call A / C | verdict | job |
+|---|---|---|---|---|---|---|---|---|---|
+| 2, P=1 | 190.0 / 287.2 | 1.546 (0.145) | 1.270 (0.176) | 225 / 305 | 287 / 1,370 | 0.46 | 551 / 552 | loss | 261112-040534-165b69 |
+| 2, P=4 | 186.9 / 240.3 | 1.258 (0.186) | 1.130 (0.459) | 225 / 305 | 110 / 1,331 | 0.37 | 550 / 551 | no win | 261112-040540-dc3982 |
+| 2, P=14 | 257.0 / 338.0 | 1.326 (0.003) | 1.238 (0.096) | 225 / 305 | 63 / 1,288 | 0.45 | 551 / 552 | loss | 261112-040546-2390a9 |
+| 3, P=1 | 229.3 / 287.3 | 1.245 (0.044) | 1.631 (0.036) | 215 / 295 | 9,634 / 10,271 | 1.27 | 201 / 203 | loss | 261112-040552-6a1eea |
+| 3, P=4 | 224.4 / 286.8 | 1.300 (0.022) | 1.435 (0.120) | 215 / 297 | 10,102 / 25,902 | 2.11 | 202 / 207 | loss | 261112-040557-766cf0 |
+| 3, P=14 | 299.2 / 371.3 | 1.239 (0.039) | 1.414 (0.078) | 215 / 295 | 14,897 / 306,468 | 5.92 | 206 / 398 | loss | 261112-040603-2ef310 |
+
+- **Pattern 2: wheel loss** (a loss at P = 1 and 14; at P = 4, r = 1.258 sits just under the
+  loss line 1.286). The heap bound fails at every P: 305 bytes per line against a cap of 248.
+  The LOG thread spends 0.37 to 0.46 of (A)'s CPU per line (no heap sift), but fire lag p99 is
+  4.7 to 20 times (A)'s: `next()` is the end of the due line's 1 ms slot.
+- **Pattern 3: wheel loss** at every P, p99 1.41 to 1.63 times and heap 1.37 times (A)'s. At
+  P = 4 and 14 the LOG thread falls behind: fire lag p99 2.6 and 21 times (A)'s (306 ms at
+  P = 14), LOG CPU 2.1 and 5.9 times, and a call's line stays filed 398 ms against 206 ms. Both
+  hold the same lines (peak 143,360 at P = 14), so it is the per-line cost of keeping 143,000
+  filed lines in the wheel, not their number: the heap keeps its keys in one 40-byte-per-line
+  vector and touches a record once, when it pops; the wheel links through the records themselves
+  (about 40 MB of them at P = 14, past this host's 16 MB L3) and touches each again when its
+  level cascades and when it expires. That attribution is from the numbers, not a profile.
+- **Order is kept**: 0 per-thread and 0 due-order inversions at every pattern and P
+  (261112-040508-910d14), and TSan clean (261112-040521-982cc9).
+- **What (C) needed that the wheel lacks**: a sorted batch per pass, because `expire()` hands a
+  slot's lines back unsorted and a line already due when the LOG thread files it must bypass the
+  wheel to keep due order; a self-reference (`shared_ptr`) per filed record, because the wheel
+  does not own what it files; the entry inside the record with an owner pointer and the sort key
+  (+80 bytes per record, which is the whole heap failure); and a cancel flag the fire checks, as
+  in (B), so a cleared line stays filed until its slot.
+- **Why (C)'s producer pays more though its producer code is (A)'s**: the only change on the
+  producer's side is the record's size, `sizeof(Logging)` 184 to 264, which takes the
+  `make_shared` block from 200 to 280 bytes, past the 256 bytes macOS serves from its nano
+allocator. Whether that boundary is the gap is tested by the same rows with the nano allocator
+off (`MallocNanoZone=0`): 261112-052830-0b2f0e (pattern 3, P = 1) and 261112-052833-be4dfa
+(pattern 2, P = 1), diagnostics, not verdict rows.
+
+### The wheel at 45f98eb
+
+These rows ran at `Kronuz/wheel@50665c8`. From there to `45f98eb` the wheel reshaped `arm`'s
+inlining, made an owner `arm` or `cancel` of an unarmed entry with a `next` (one queued behind
+another `arm_remote` push) file every stripe, and changed only the destructor's firing. (C) never
+calls `arm_remote`: its inbox is always empty and a new record's entry has no `next`, so the
+change adds one load of `e.next` to an `arm` that writes that line anyway, and the drain never
+runs. (C)'s deciding metrics (producer median, p99, heap) run no wheel code at all; only its LOG
+CPU and fire lag could move, by nanoseconds per line. (B) runs 1 to 14 producers, each on its own
+stripe below 64, and its LOG thread never calls owner `arm`, so neither row set needs a rerun for
+the verdict. Not rerun at 45f98eb; this is from the diff.
+
+### For the next decision
+
+(C) is not no worse than (A): it loses both deferred patterns at every P on producer median
+(+24% to +55%), p99, heap (+80 bytes per line) and fire lag (+1 ms), and in pattern 3 its LOG
+thread falls behind from P = 4. By D72, logger keeps its deferred-line heap, and with it
+`ScheduledTask`'s one-shot cancel and `Thread` from Kronuz/scheduler. A port worth a rerun
+needs a record within 10% of (A)'s (at most 22 bytes more): the entry and the self-reference
+replacing the `ScheduledTask` base, which such a port drops (its post hand-off union and times),
+instead of sitting beside it, the record reached from its entry by offset rather than an owner
+pointer, and the sort key read from the record's existing fields. That would answer the heap
+bound; pattern 3's LOG-thread cost at P = 14 and the 1 ms of fire lag are
+the wheel's own and would remain.
