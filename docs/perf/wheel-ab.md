@@ -327,3 +327,112 @@ P = 1 p99 at 1.133 (interval 0.982-1.424, straddling it; w 0.293). The medians a
 six (0.98 to 1.02), and heap is 1.031 times (A) throughout. D72's one mechanism is therefore
 not proven on p99 at P = 1; the owner decides whether to accept those p99 losses (and the
 lateness above) or keep logger's heap.
+
+## Arm D, fixed
+
+**(D) at logger:afe86c5 is no worse than (A) on all six deferred rows by the Rule for (D).** Producer
+median r is 0.960 to 1.084 and p99 r 0.966 to 1.099; heap is 1.031 times (A) on every row. No row is
+a win and no row is a loss. Outside the Rule, (D) still writes pattern 2's lines about 1 ms later
+than (A), the wheel's 1 ms slot. All jobs ran at afe86c5 on the same host and toolchain as above.
+
+### Cause
+
+1. **Pattern 3, P = 14: LOG CPU 2.6 times, lateness 6.5 times.** In a `sample` profile of (D)
+   (`run.sh profile-d 3 14 D`, 261112-081713-5f3fc7), 521 of the LOG thread's 1,061 active samples
+   are the `memmove` of `std::vector<Deferred>::insert` in `file_deferred`. In (A)'s profile
+   (261112-081716-e81894) no such cost appears, and its `pop_heap` is small. The insert is the
+   bypass, a line already due when the LOG thread files it, put into the sorted batch in order.
+   Each insert is linear, so a pass's inserts are quadratic. The counters (`run.sh stats-d`,
+   261112-082031-adcffd) show 114,942 of 716,800 lines bypassed, a mean of 4.9 ms past due, a batch
+   of up to 29K, and one pass that expired 117,760 lines.
+2. **Why lines are due at filing.** Producers queue lines in their rings. The LOG thread files a
+   line only when it wakes, and it sleeps until the next filed deadline. A trace at P = 1
+   (261112-100143-5b66af) shows the thread slept 198 ms with nothing filed recently and woke
+   4.77 ms past its target. Every line due in those 4.77 ms was already due when filed. (A) has
+   the same wake rule and files just as late, but its heap takes a due line in O(log n).
+3. **Pattern 3, P = 1: p99 1.469.** The P = 1 profile (261112-082038-4353a0) has only about 27
+   active LOG samples in 2,683, too few to show the cost. The cause at P = 1 comes from the
+   counters (6,588 of 51,200 lines bypassed, mean 4.9 ms late, a batch of up to 2,047;
+   261112-082033-7add00) and from the experiment below. Replacing the batch with a heap (change 1)
+   left p99 at 1.438. Making the LOG thread file promptly (change 2) brought p99 to 1.031. The
+   loss comes from the late filing burst itself, not from the batch's data structure. The profile
+   does not show how that burst raises the producer's p99 blocks.
+4. **Pattern 2, P = 1: p99 1.133** was noise. On that row (D) bypasses 42 lines with a largest
+   pass of 27 (261112-082035-21c273). Three reruns gave p99 r 0.990 (change 1), 1.010 (change 2)
+   and 1.099 (final), and every interval straddles 1.10.
+
+### Changes, each rerun on the losing rows
+
+| change | commit | p3 P=1 median / p99 | p3 P=14 median / p99, lag, LOG CPU | p2 P=1 median / p99 | bypassed p3 P=14 / P=1 |
+|---|---|---|---|---|---|
+| none (Verdict D) | 8094113 | 0.978 / **1.469** | 0.994 / 0.967, 6.53, 2.60 | 1.000 / 1.133 | 114,942 / 6,588 |
+| 1: the due batch is a binary heap | 6c29783 | 0.988 / **1.438** [1.208-1.564] | 0.998 / 1.034, 1.17, 1.18 | 1.003 / 0.990 | 54,524 / n/a |
+| 2: after a pass that filed lines, sleep at most one tick (with 1) | e7a4f3f | 1.019 / 1.031 [0.880-1.167] | 0.998 / 1.025, 1.26, 1.14 | 0.963 / 1.010 | 28,672 / 5,120 |
+| 3: a push due within 8 ms of the sleep's end wakes the LOG thread (with 1, 2) | 3dcc62e | 0.975 / 0.886 [0.804-1.211] | 0.990 / 0.972, 1.12, 1.17 | n/a | 0 / 0 |
+| final: 2 + 3, change 1 reverted, the sorted batch | afe86c5 | 0.960 / 0.966 | 0.992 / 0.983, 1.12, 1.07 | 1.084 / 1.099 | 0 / 0 |
+
+Jobs, rows in table order: 261112-082231-ac506e, -082234-9559fb, -082236-9714e6; 261112-082706-07b590,
+-082708-f1c86e, -082711-f34b89; 261112-101944-86316f, -101946-73c9a9; and the final rows below.
+Counters: 261112-082724-b5f70b (change 1 alone), -082652-65999f and -082655-1d3288 (2),
+-101939-91ce7a and -101942-4b0fb6 (3), -111538-27efbf and -111541-4c2f8a (final).
+
+After change 3 no line is bypassed, so the batch never takes an insert. Change 1's heap no longer
+pays for itself, and the final (D) drops it: the wheel's expired batch is sorted once per pass, as
+in Verdict D. Changes 2 and 3 alter only the LOG thread's sleep, so a port ships them with the
+wheel. Their cost is in the rows: the LOG thread wakes once per tick while lines arrive, and a
+producer whose line is due near the sleep's end notifies it.
+
+### Final rows
+
+At logger:afe86c5, `exclusive`, 40 rounds a row, `summarize.py --paired`. Correctness:
+`check-d` 261112-111533-94c654 and `tsan-d` 261112-111535-1f3660 pass (every line once, none early,
+no cleared line written, 0 per-thread and 0 due-order inversions, TSan clean).
+
+| row | job | r median [interval] (w) | r p99 [interval] (w) | lag p99 ms A / D (r) | LOG CPU r [interval] | no worse than A |
+|---|---|---|---|---|---|---|
+| pattern 3, P = 1 | 261112-111543-8bd01a | 0.960 [0.927-1.018] (0.078) | 0.966 [0.910-1.091] (0.116) | 9.03 / 9.65 (1.098) | 1.007 [0.872-1.118] | yes |
+| pattern 3, P = 4 | 261112-111549-a6d0a9 | 0.979 [0.931-1.045] (0.066) | 0.995 [0.934-1.060] (0.135) | 9.45 / 10.74 (1.147) | 0.984 [0.927-1.131] | yes |
+| pattern 3, P = 14 | 261112-111546-ef2712 | 0.992 [0.975-1.011] (0.018) | 0.983 [0.920-1.022] (0.075) | 12.08 / 14.11 (1.117) | 1.069 [1.021-1.110] | yes |
+| pattern 2, P = 1 | 261112-111551-87f1d9 | 1.084 [0.997-1.182] (0.087) | 1.099 [0.847-1.261] (0.123) | 0.32 / 1.37 (4.30) | 0.441 [0.335-0.578] | yes; median and p99 straddle 1.10 |
+| pattern 2, P = 4 | 261112-111554-1986e4 | 1.034 [0.960-1.085] (0.067) | 0.997 [0.910-1.064] (0.090) | 0.11 / 1.34 (11.9) | 0.340 [0.287-0.398] | yes |
+| pattern 2, P = 14 | 261112-111556-0924db | 1.011 [0.978-1.070] (0.022) | 1.016 [0.812-1.257] (0.188) | 0.07 / 1.31 (18.8) | 0.340 [0.253-0.376] | yes; p99 straddles 1.10 |
+
+Heap per call is 267.7 against (A)'s 259.7 bytes in pattern 3 and 267.2 against 259.2 in pattern 2.
+That is +8 bytes per call, 1.031 times (A), interval [1.031-1.031], on every row.
+
+- **Where (D) loses, outside the Rule.** Pattern 2's lateness p99 is 1.31 to 1.37 ms against 0.07
+  to 0.32 ms, which adds 1.0 to 1.24 ms to lines deferred 100 ms to 1 s. The cause is `next()`:
+  it is the end of the next occupied 1 ms slot (`wheel.hh`), so a line waits for the end of its
+  slot. Pattern 3's lateness is 1.10 to 1.15 times (A)'s (+0.6 to +2.0 ms on 9 to 14 ms), and every
+  interval lies above 1.0. LOG CPU at pattern 3, P = 14 is 1.069 [1.021-1.110] (+20 ns a call,
+  down from 2.6 times). At pattern 2 (D)'s LOG thread uses 0.34 to 0.44 of (A)'s CPU.
+- **The one row to watch: pattern 2, P = 1.** Its median r of 1.084 has an interval of
+  [0.997-1.182]. That interval straddles 1.10 and almost excludes 1.00, so it could hide a cost
+  of up to about 8%. Earlier code measured 1.000 [0.956-1.130] on this row (Verdict D), 1.003
+  [0.965-1.060] (change 1) and 0.963 [0.939-1.065] (change 2). Pattern 2 bypasses almost nothing,
+  so the filing path is nearly the same in all four runs. Their point estimates span 0.96 to 1.08,
+  against A/A bands w of 0.05 to 0.10. The honest reading is between equal and a few percent
+  worse. It is not a loss, whose bar is 1.10 + w = 1.187.
+- **`sizeof(Logging)` 192 against 184** (+8 bytes, 261112-062455-24c582). The `make_shared` block
+  is 208 against 200 bytes, both in macOS's nano allocator (256 bytes and under). The cost is the
+  measured +8 heap bytes per deferred line (1.031 times), plus 8 bytes for each line held:
+  1.1 MB at pattern 3, P = 14's peak of 143,360 held lines. Producer time shows no cost from the
+  size, with median r 0.96 to 1.03 on five rows.
+- **What Kronuz/wheel would need: nothing for the Rule.** (D) sorts each pass's expired batch
+  itself: 24-byte keys, up to 17,408 lines a pass at pattern 3, P = 14 and 1,024 at P = 1. With
+  that sort, LOG CPU is 0.98 to 1.07 times (A)'s, so a sorted `expire` in the wheel would move the
+  sort without a measured saving. The bypass that cost 2.6 times came from logger's sleep policy,
+  not from the wheel, and the fix is in logger. The one wheel-owned cost is the 1 ms of
+  lateness. Matching (A)'s 0.07 to 0.32 ms would take a wheel whose `next()` and `expire(now)`
+  work to the entry's deadline instead of its slot's end, a change to the wheel's resolution
+  contract. This is unmeasured and not proposed here.
+
+**For the lead:** (D), the wheel, matches the heap on every deferred row under the Rule.
+Medians are 0.96 to 1.08, with only pattern 2, P = 1 straddling 1.10 at 1.084 [0.997-1.182]. p99
+is 0.97 to 1.10, with pattern 2 at P = 1 and P = 14 straddling. Heap is 1.031 times (A), from
+`sizeof(Logging)` 192 against 184. The fix lives in logger's LOG thread: it files promptly after
+filing (one-tick sleep) and wakes for a line due within 8 ms of its sleep's end. It needs no wheel
+change. The price of one mechanism (D72) is lateness: deferred lines are written about 1 ms later
+in pattern 2 (1.3 ms against 0.07 to 0.32 ms p99) and 1.10 to 1.15 times later in pattern 3. The
+LOG thread also costs 7% more CPU at pattern 3, P = 14 and 56 to 66% less at pattern 2. The owner
+decides whether that lateness is acceptable: wheel, or keep the heap.
