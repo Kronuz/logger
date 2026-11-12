@@ -223,3 +223,65 @@ instead of sitting beside it, the record reached from its entry by offset rather
 pointer, and the sort key read from the record's existing fields. That would answer the heap
 bound; pattern 3's LOG-thread cost at P = 14 and the 1 ms of fire lag are
 the wheel's own and would remain.
+
+## Arm D
+
+(D) is (C)'s shape and order guarantees on a record at most 22 bytes over (A)'s, the size the heap
+bound allows (1.10 times 225 bytes per deferred line). It is `bench/wheel_ab/d/logger.{h,cc}`, a
+copy of the library with only that change, built apart from the library's CMakeLists by
+`bench/wheel_ab/d/CMakeLists.txt` (`run.sh build-d`) against `Kronuz/wheel@45f98eb`, into
+`logger_wheel_ab_d`; the library is unchanged. Everything outside the record is (C): the LOG thread
+files deferred lines in a `wheel::timer_wheel` it owns, each pass's `expire(now)` hands back the
+due lines, the pass sorts that batch and merges it with the queues' lines, a line already due when
+filed bypasses the wheel into the batch, a cleared line stays filed until its slot, and the wait
+is until `next()`.
+
+### Design: where (C)'s 80 bytes go
+
+`sizeof(Logging)` is 184 bytes in (A), of which `ScheduledTask` is 56 and `Logging`'s own fields
+128. (C) added 80 beside all of it. (D) takes 64 of the 80 out of the places that already hold
+them, and the last 16 is the one thing the wheel needs that the record lacks.
+
+| (C)'s field | bytes | (D) |
+|---|---|---|
+| `timer_entry` (next, pprev, deadline, fire) | 32 | the entry replaces `ScheduledTask`'s wakeup time (8) and its post hand-off union (24): both are scheduler machinery, unused by logger, which never `post()`s. `Logging` derives from `timer_entry` instead of `ScheduledTask`, so the 32 bytes the entry needs are the 32 the base gave up. |
+| owner pointer (entry to record) | 8 | none. The entry is `Logging`'s base, so the record is a `static_cast` from the entry the wheel hands back: no pointer, no offset arithmetic. |
+| sort key: due | 8 | none. It is the entry's `deadline`, which `arm` already sets to the due time. |
+| sort key: call time | 8 | none. It is the record's `atom_created_at` (every record that reaches the wheel is made with created_at equal to its call time, as `do_log` and `do_log_in` pass `now` twice). |
+| sort key: filing order | 8 | none. The tie-break past (due, call time) is dropped: the key (due, created) is equal only for two lines logged in the same nanosecond, which no thread does (calls are at least a clock read apart) and across threads has no program order to keep. The check counts inversions to prove it. |
+| self-reference (`shared_ptr`) | 16 | kept: a filed record is owned by the wheel, which does not own what it files, and a cleared line's handle may be gone (pattern 3 drops 99 in 100 at once). It sits where (C) had it. |
+
+The one-shot (`atom_created_at`, `atom_cleared_at`, `atom_cancelled`) is `ScheduledTask`'s, moved
+into `Logging` unchanged (16 bytes of atomics; the cancel flag fills the padding after
+`Logging`'s three bools); `operator bool`, `cancelled()`, the claim and the run-unless-cancelled
+check are the same four lines. The batch the pass sorts holds (due, created, record pointer)
+instead of (due, created, filing order, `shared_ptr`): 24 bytes per due line against (C)'s 40, with
+the `shared_ptr` moved out of the record only when the line is written.
+
+| record | `sizeof(Logging)` | `make_shared` block | requested over (A) | `operator new` bytes per deferred line |
+|---|---|---|---|---|
+| (A) | 184 | 200 | 0 | 225 (pattern 2) |
+| (C) | 264 | 280 | +80 | 305 |
+| (D) | 192 | 208 | +8 | about 233, 1.04 times (A)'s |
+
+`sizeof` from `run.sh sizeof` (261112-062455-24c582, `Apple clang 17`, x86-64). (D)'s block of
+208 bytes stays inside the 256 bytes macOS's nano allocator serves (the line (C) crossed), and its
+heap per line is expected at 1.04 times (A)'s, inside the 1.10 bound; the measured heap is in the
+rows. The 8 bytes over (A) are the self-reference's 16 less the 8 the entry's replacement of
+`ScheduledTask` leaves unused after the one-shot moves in (`ScheduledTask`'s own padding).
+
+### Rule for (D)
+
+The Rule above, with the statistic of D77 in place of the six-pair median. A row (a pattern at a P)
+is `run.sh row-d PATTERN P`, one `exclusive` job at a named commit: 40 rounds, each running one
+process of (A), one of its A/A twin (A2, the same binary) and one of (D), in an order rotated each
+round, each process one warm-up round (discarded) and one measured round. Per metric, r is the
+median over rounds of D / A taken within the round, with a distribution-free 95% interval from
+order statistics; w is the farther end of the interval of A2 / A from 1.00. **Win**, **loss** and
+**no win** are the Rule's (win: r(median ns) <= 0.90 - w, r(p99) <= 1.10 + w, heap D <= 1.10 times
+A; loss: r(median ns) >= 1.10 + w), and each row also says whether (D) is **no worse than (A)**
+(D72's bar for one mechanism): r(median ns) <= 1.10, r(p99) <= 1.10 + w, heap D <= 1.10 times A. A
+row whose interval straddles 1.10 is reported as such. Correctness gates every row as for (C):
+`run.sh check-d` (every line once, none early, no cleared line written, 0 per-thread and 0
+due-order inversions) and `run.sh tsan-d`. Patterns 2 and 3 at P = 1, 4 and 14; pattern 1 has no
+timer in (D), so no rows.
