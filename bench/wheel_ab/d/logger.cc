@@ -884,8 +884,9 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	static bool later(const Head& a, const Head& b) noexcept {
 		return a.due != b.due ? a.due > b.due : a.created > b.created;
 	}
-	static bool later_deferred(const Deferred& a, const Deferred& b) noexcept {
-		return a.due != b.due ? a.due > b.due : a.created > b.created;
+	// Batch order: the earliest first.
+	static bool earlier_deferred(const Deferred& a, const Deferred& b) noexcept {
+		return a.due != b.due ? a.due < b.due : a.created < b.created;
 	}
 
 	std::mutex mtx;
