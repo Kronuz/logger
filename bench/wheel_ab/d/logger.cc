@@ -901,7 +901,10 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	std::uint64_t st_bypass = 0, st_passes = 0, st_expired = 0, st_filed_wheel = 0;
 	std::int64_t st_bypass_late_ns = 0;
 	std::size_t st_bypass_max_batch = 0, st_max_expired = 0;
-	std::int64_t st_max_pass_ns = 0;
+	std::int64_t st_max_pass_ns = 0, st_slept_from = 0, st_slept_until = 0, st_slept_to = 0, st_pass_traced = -1;
+	bool st_slept_hot = false;
+	unsigned st_traces = 0;
+	std::uint64_t st_passes_all = 0, st_traced_pass = ~0ull;
 	void print_stats() {
 		std::fprintf(stderr, "stats passes=%llu expired=%llu max_expired=%zu bypass=%llu bypass_mean_late_us=%.1f bypass_max_batch=%zu wheel_filed=%llu max_pass_ms=%.2f\n",
 			(unsigned long long)st_passes, (unsigned long long)st_expired, st_max_expired, (unsigned long long)st_bypass,
@@ -1003,6 +1006,13 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 		if (due <= pass_now) {
 #ifdef WAB_STATS
 			++st_bypass;
+			if (st_traced_pass != st_passes_all && st_traces < 12) {
+				st_traced_pass = st_passes_all;
+				++st_traces;
+				std::fprintf(stderr, "trace bypass: pass_now-sleep_start=%.2fms sleep_until-start=%.2fms slept_hot=%d wake-until=%.2fms late=%.2fms\n",
+					(pass_now - st_slept_from) / 1e6, (st_slept_until - st_slept_from) / 1e6, int(st_slept_hot), (pass_now - st_slept_until) / 1e6,
+					(pass_now - due) / 1e6);
+			}
 			st_bypass_late_ns += pass_now - due;
 			st_bypass_max_batch = std::max(st_bypass_max_batch, batch.size());
 #endif
@@ -1045,6 +1055,9 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 		bool worked = false;
 		std::int64_t later_head = std::numeric_limits<std::int64_t>::max();
 		pass_now = now;
+#ifdef WAB_STATS
+		++st_passes_all;
+#endif
 		batch.clear();
 		if (wheel_) {
 			wheel_->expire(static_cast<std::uint64_t>(now), [this](wheel::timer_entry& e) {
@@ -1317,6 +1330,11 @@ public:
 			// After filing lines, sleep at most one tick: more are likely in the queues, and filed late
 			// they would be due already.
 			const auto until = hot ? std::min(next_due, t + kTickNs) : next_due;
+#ifdef WAB_STATS
+			st_slept_from = t;
+			st_slept_until = until;
+			st_slept_hot = hot;
+#endif
 			hot = false;
 			worker_wake.store(until, std::memory_order_relaxed);
 			worker_state.fetch_or(kSleeping, std::memory_order_seq_cst);

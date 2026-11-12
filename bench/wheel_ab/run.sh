@@ -195,7 +195,7 @@ profile-d)
 	;;
 stats-d)
 	build_d "$BUILD_D" Release
-	"$BUILD_D/logger_wheel_ab_d_stats" --backend D --pattern "${2:?pattern}" --producers "${3:?producers}" --rounds 4 2>&1 | grep -E '^(stats|\{)'
+	"$BUILD_D/logger_wheel_ab_d_stats" --backend D --pattern "${2:?pattern}" --producers "${3:?producers}" --rounds 4 2>&1 | grep -E '^(stats|trace|\{)'
 	;;
 row-d)
 	pattern=${2:?pattern}
