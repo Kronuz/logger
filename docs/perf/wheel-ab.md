@@ -278,10 +278,11 @@ process of (A), one of its A/A twin (A2, the same binary) and one of (D), in an 
 round, each process one warm-up round (discarded) and one measured round. Per metric, r is the
 median over rounds of D / A taken within the round, with a distribution-free 95% interval from
 order statistics; w is the farther end of the interval of A2 / A from 1.00. **Win**, **loss** and
-**no win** are the Rule's (win: r(median ns) <= 0.90 - w, r(p99) <= 1.10 + w, heap D <= 1.10 times
-A; loss: r(median ns) >= 1.10 + w), and each row also says whether (D) is **no worse than (A)**
-(D72's bar for one mechanism): r(median ns) <= 1.10, r(p99) <= 1.10 + w, heap D <= 1.10 times A. A
-row whose interval straddles 1.10 is reported as such. Correctness gates every row as for (C):
+**no win** are the Rule's, with the p99 bound at 1.10 itself (win: r(median ns) <= 0.90 - w,
+r(p99) <= 1.10, heap D <= 1.10 times A; loss: r(median ns) >= 1.10 + w), and each row also says
+whether (D) is **no worse than (A)** (D72's bar for one mechanism): r(median ns) <= 1.10, r(p99) <=
+1.10, heap D <= 1.10 times A. The p99's w and interval are reported beside its r, not added to the
+bound. A metric whose interval straddles 1.10 is reported as straddling (D77). Correctness gates every row as for (C):
 `run.sh check-d` (every line once, none early, no cleared line written, 0 per-thread and 0
 due-order inversions) and `run.sh tsan-d`. Patterns 2 and 3 at P = 1, 4 and 14; pattern 1 has no
 timer in (D), so no rows.

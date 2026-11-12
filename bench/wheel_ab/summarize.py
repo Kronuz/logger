@@ -170,18 +170,20 @@ def paired(path: str) -> int:
     heap_d = 0.0 if heap_d < 1 else heap_d
     heap_ok = heap_d <= 1.10 * heap_a
     median_win = r_med <= 0.90 - w_med
-    p99_ok = r_p99 <= 1.10 + w_p99
+    p99_ok = r_p99 <= 1.10
     if median_win and p99_ok and heap_ok:
         verdict = "win"
     elif r_med >= 1.10 + w_med:
         verdict = "loss"
     else:
         verdict = "no win"
-    no_worse = r_med <= 1.10 and r_p99 <= 1.10 + w_p99 and heap_ok
+    no_worse = r_med <= 1.10 and p99_ok and heap_ok
     straddle = lo_med <= 1.10 < hi_med
+    straddle_p99 = lo_p99 <= 1.10 < hi_p99
     print(
         f"verdict {name}: {verdict}; no worse than A: {no_worse} (median r {r_med:.3f} [{lo_med:.3f}-{hi_med:.3f}] vs 1.10"
-        f"{', interval straddles 1.10' if straddle else ''}; p99 r {r_p99:.3f} vs {1.10 + w_p99:.3f}; "
+        f"{', interval straddles 1.10' if straddle else ''}; p99 r {r_p99:.3f} [{lo_p99:.3f}-{hi_p99:.3f}] (w {w_p99:.3f}) vs 1.10"
+        f"{', interval straddles 1.10' if straddle_p99 else ''}; "
         f"heap D {heap_d:.1f} vs 1.10 x A {heap_a:.1f}: {heap_ok})"
     )
     for m in ("lag_p99_us", "log_cpu_ns_per_call"):
