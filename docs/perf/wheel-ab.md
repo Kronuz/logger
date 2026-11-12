@@ -267,8 +267,8 @@ the `shared_ptr` moved out of the record only when the line is written.
 `sizeof` from `run.sh sizeof` (261112-062455-24c582, `Apple clang 17`, x86-64). (D)'s block of
 208 bytes stays inside the 256 bytes macOS's nano allocator serves (the line (C) crossed), and its
 heap per line is expected at 1.04 times (A)'s, inside the 1.10 bound; the measured heap is in the
-rows. The 8 bytes over (A) are the self-reference's 16 less the 8 the entry's replacement of
-`ScheduledTask` leaves unused after the one-shot moves in (`ScheduledTask`'s own padding).
+rows. The 8 bytes over (A) are the self-reference's 16 less the 8 saved where the entry and the one-shot
+(48 bytes) replace `ScheduledTask` (56, with the cancel flag and `post_ordered` padded to 8).
 
 ### Rule for (D)
 
