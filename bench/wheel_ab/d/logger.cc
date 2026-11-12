@@ -899,6 +899,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	std::vector<Deferred> batch;
 	std::size_t batch_at = 0;
 	std::int64_t pass_now = std::numeric_limits<std::int64_t>::min();   // during a pass: its `now`
+	std::uint64_t filed = 0;                 // LOG thread only: deferred lines filed so far
 	std::vector<Head> heads;                 // LOG thread only: each queue's next line, during a pass
 	long written = 0;                        // LOG thread only: queued lines written this pass
 	std::int64_t next_due = std::numeric_limits<std::int64_t>::max();   // after a pass: the earliest line left
@@ -982,6 +983,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 
 	// Files a deferred line in the wheel, or, already due during a pass, straight into its batch.
 	void file_deferred(std::shared_ptr<Logging>&& task, std::int64_t due, std::int64_t created) {
+		++filed;
 		if (!wheel_) {
 			return;   // after the last look: released
 		}
