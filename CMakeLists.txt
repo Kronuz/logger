@@ -156,3 +156,21 @@ if(LOGGER_BUILD_BENCH AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_executable(logger_latency bench/latency.cc)
   target_link_libraries(logger_latency PRIVATE logger)
 endif()
+
+# logger's scheduling on its own queues against a prototype on Kronuz/wheel (opt-in; the wheel is
+# fetched only here). docs/perf/wheel-ab.md has the method and the rule; bench/wheel_ab/run.sh runs it.
+option(LOGGER_BUILD_WHEEL_AB "Build bench/wheel_ab (fetches Kronuz/wheel)" OFF)
+if(LOGGER_BUILD_WHEEL_AB AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  FetchContent_Declare(wheel
+    GIT_REPOSITORY https://github.com/Kronuz/wheel.git
+    GIT_TAG        50665c849fb24e193afc757a258ec8403901071c)
+  FetchContent_MakeAvailable(wheel)
+  add_executable(logger_wheel_ab bench/wheel_ab/ab.cc)
+  target_link_libraries(logger_wheel_ab PRIVATE logger wheel::wheel)
+  foreach(backend A B)
+    foreach(pattern 1 2 3)
+      add_test(NAME logger_wheel_ab_check_${backend}${pattern}
+        COMMAND logger_wheel_ab --backend ${backend} --pattern ${pattern} --producers 4 --check --rounds 1 --bursts 3)
+    endforeach()
+  endforeach()
+endif()
