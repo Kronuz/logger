@@ -339,7 +339,7 @@ struct alignas(128) Producer {
 	std::vector<double> samples;                                // ns per call, per block, measured rounds
 	std::vector<Log> keep_a;                                    // pattern 3, the slow 1%
 	std::vector<wab::Rec*> keep_b;
-	long kept_lines = 0;
+	std::atomic<long> kept_lines{0};   // atomic: TSan does not see libc++'s barrier on macOS as a sync
 	wab::Pool pool;
 	char msg[16];
 };
@@ -425,7 +425,7 @@ static inline void call_a(Producer& p, std::uint64_t id) {
 		Log h = L_DELAYED(true, std::chrono::nanoseconds(kSlowDelay), LOG_WARNING, msg);
 		if (kept(id)) {
 			p.keep_a.push_back(std::move(h));
-			++p.kept_lines;
+			p.kept_lines.store(p.kept_lines.load(std::memory_order_relaxed) + 1, std::memory_order_release);
 		}
 	}
 }
@@ -483,7 +483,7 @@ static inline void call_b(Producer& p, std::uint64_t id) {
 	if constexpr (Pattern == 3) {
 		if (kept(id)) {
 			p.keep_b.push_back(r);
-			++p.kept_lines;
+			p.kept_lines.store(p.kept_lines.load(std::memory_order_relaxed) + 1, std::memory_order_release);
 		} else {
 			drop_b(p, r);
 		}
@@ -684,8 +684,7 @@ int main(int argc, char** argv) {
 		long held = 0;
 		if (cfg.pattern == 3) {
 			for (auto& p : producers) {
-				held += p->kept_lines;
-				p->kept_lines = 0;
+				held += p->kept_lines.exchange(0, std::memory_order_acquire);
 			}
 			expected += held;
 			held = cfg.backend == 'A' ? held : 0;
