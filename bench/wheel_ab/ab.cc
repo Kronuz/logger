@@ -353,8 +353,9 @@ static wab::WheelLog* wlog = nullptr;
 
 // Check mode: per id, the times it was written and the clock before its call.
 static std::unique_ptr<std::atomic<std::uint8_t>[]> hits;
-static std::unique_ptr<std::int64_t[]> pre;
-static std::unique_ptr<std::int64_t[]> post;   // the clock after its call: its due lies in [pre, post] + delay
+// Relaxed atomics: `post` is stored after the call has published the line; the sink skips a 0.
+static std::unique_ptr<std::atomic<std::int64_t>[]> pre;
+static std::unique_ptr<std::atomic<std::int64_t>[]> post;   // the clock after its call: its due lies in [pre, post] + delay
 
 struct SinkState {
 	alignas(128) std::atomic<long> sunk{0};
@@ -391,7 +392,8 @@ static void on_line(std::string_view s) {
 			if (cfg.check) {
 				const std::uint64_t i = th * per_producer + seq;
 				hits[i].store(static_cast<std::uint8_t>(hits[i].load(std::memory_order_relaxed) + 1), std::memory_order_relaxed);
-				if (t < pre[i] + delay_of(id)) {
+				const std::int64_t lo = pre[i].load(std::memory_order_relaxed);
+				if (t < lo + delay_of(id)) {
 					++sink.early;
 				}
 				if (cfg.pattern == 1) {
@@ -402,10 +404,11 @@ static void on_line(std::string_view s) {
 					}
 				} else {
 					// Due order: a line whose due is surely earlier than one written before it.
-					if (post[i] + delay_of(id) < sink.max_due_lo) {
+					const std::int64_t hi = post[i].load(std::memory_order_relaxed);
+					if (hi != 0 && hi + delay_of(id) < sink.max_due_lo) {
 						++sink.due_inversions;
 					}
-					sink.max_due_lo = std::max(sink.max_due_lo, pre[i] + delay_of(id));
+					sink.max_due_lo = std::max(sink.max_due_lo, lo + delay_of(id));
 				}
 			}
 		} else {
@@ -523,7 +526,7 @@ static void produce(Producer& p) {
 					const std::uint64_t id = make_id(p.index, p.seq);
 					std::memcpy(p.msg, &id, 8);
 					if (cfg.check) {
-						pre[p.index * per_producer + p.seq] = now_ns();
+						pre[p.index * per_producer + p.seq].store(now_ns(), std::memory_order_relaxed);
 					}
 					if constexpr (Backend == 'A') {
 						call_a<Pattern, Formatted>(p, id);
@@ -531,7 +534,7 @@ static void produce(Producer& p) {
 						call_b<Pattern, Formatted>(p, id);
 					}
 					if (cfg.check) {
-						post[p.index * per_producer + p.seq] = now_ns();
+						post[p.index * per_producer + p.seq].store(now_ns(), std::memory_order_relaxed);
 					}
 					++p.seq;
 				}
@@ -662,8 +665,8 @@ int main(int argc, char** argv) {
 	sink.last_seq.assign(P, -1);
 	if (cfg.check) {
 		hits = std::make_unique<std::atomic<std::uint8_t>[]>(per_producer * P);
-		pre = std::make_unique<std::int64_t[]>(per_producer * P);
-		post = std::make_unique<std::int64_t[]>(per_producer * P);
+		pre = std::make_unique<std::atomic<std::int64_t>[]>(per_producer * P);
+		post = std::make_unique<std::atomic<std::int64_t>[]>(per_producer * P);
 	}
 	std::printf("config backend=%c pattern=%d producers=%u formatted=%d check=%d rounds=%d bursts=%d burst=%d pause_ms=%d"
 		" block=%d log_level=%d with_timestamp=%d wheel=50665c8 sizeof_rec=%zu sizeof_logging=%zu\n",
