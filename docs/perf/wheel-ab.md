@@ -190,9 +190,14 @@ median of six paired ratios, w the A/A band, both from `run.sh row` / `row-c`.
 - **Why (C)'s producer pays more though its producer code is (A)'s**: the only change on the
   producer's side is the record's size, `sizeof(Logging)` 184 to 264, which takes the
   `make_shared` block from 200 to 280 bytes, past the 256 bytes macOS serves from its nano
-allocator. Whether that boundary is the gap is tested by the same rows with the nano allocator
-off (`MallocNanoZone=0`): 261112-052830-0b2f0e (pattern 3, P = 1) and 261112-052833-be4dfa
-(pattern 2, P = 1), diagnostics, not verdict rows.
+allocator. With the nano allocator off for both (`MallocNanoZone=0`, diagnostics, not verdict
+rows), (A) rises to (C)'s cost and most of the median gap closes: pattern 3, P = 1 goes from
+r 1.245 to 1.048 (w 0.079; A 272 ns, C 275 ns; 261112-055705-1b993a), pattern 2, P = 1 from
+1.546 to 1.112 (w 0.038; A 241 ns, C 279 ns; 261112-055709-999bf4). So the 256-byte boundary is
+most of (C)'s producer median gap, all of it in pattern 3; pattern 3's p99 (1.50 times) and
+about 11% of pattern 2's median remain. To stay in the nano allocator, `sizeof(Logging)` must
+stay at or below 240 bytes (the block adds 16), at most 56 bytes over (A)'s 184; the heap bound
+is tighter: at most 22 bytes over.
 
 ### The wheel at 45f98eb
 
