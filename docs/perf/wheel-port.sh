@@ -3,14 +3,18 @@
 # (docs/perf/wheel-port.md). bench/wheel_ab's harness and summary, with the labels of `run.sh row-d`
 # swapped: the reference A and its A/A twin A2 are arm D (logger_wheel_ab_d), the candidate D is the
 # library (logger_wheel_ab --backend A), so summarize.py's r = D/A is library / arm D.
-#   docs/perf/wheel-port.sh PATTERN [ROUNDS]     P = 1, 4 and 14, ROUNDS each (default 40)
-# Run it as one exclusive job per pattern. Exits 1 when a row is past 1.10 (median, p99 or heap).
+#   docs/perf/wheel-port.sh PATTERN [ROUNDS [P...]]   ROUNDS each (default 40), P default 1 4 14
+# Run it in exclusive jobs: pattern 3 whole, pattern 2 one P a job (a row of it takes about 5 min,
+# and an exclusive job at most 10). Exits 1 when a row is past 1.10 (median, p99 or heap).
 set -eu
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 HERE=$ROOT/bench/wheel_ab
 BUILD=${WAB_BUILD_D:-$ROOT/.scratch/wab-d}
 pattern=${1:?pattern}
 rounds=${2:-40}
+shift
+[ $# -gt 0 ] && shift
+[ $# -gt 0 ] || set -- 1 4 14
 
 mkdir -p "$BUILD"
 { cmake -S "$HERE/d" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build "$BUILD"; } >"$BUILD/build.log" 2>&1 \
@@ -21,7 +25,7 @@ echo "compiler $(c++ --version | head -1)"
 echo "labels: A, A2 = arm D (reference); D = the library (candidate); r = library / arm D"
 
 fail=0
-for p in 1 4 14; do
+for p in "$@"; do
 	out=$BUILD/port-$pattern-$p.log
 	: >"$out"
 	r=0
