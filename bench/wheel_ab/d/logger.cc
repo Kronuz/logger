@@ -899,6 +899,18 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	std::vector<Deferred> batch;
 	std::size_t batch_at = 0;
 	std::int64_t pass_now = std::numeric_limits<std::int64_t>::min();   // during a pass: its `now`
+#ifdef WAB_STATS
+	std::uint64_t st_bypass = 0, st_passes = 0, st_expired = 0, st_filed_wheel = 0;
+	std::int64_t st_bypass_late_ns = 0;
+	std::size_t st_bypass_max_batch = 0, st_max_expired = 0;
+	std::int64_t st_max_pass_ns = 0;
+	void print_stats() {
+		std::fprintf(stderr, "stats passes=%llu expired=%llu max_expired=%zu bypass=%llu bypass_mean_late_us=%.1f bypass_max_batch=%zu wheel_filed=%llu max_pass_ms=%.2f\n",
+			(unsigned long long)st_passes, (unsigned long long)st_expired, st_max_expired, (unsigned long long)st_bypass,
+			st_bypass ? st_bypass_late_ns / 1e3 / static_cast<double>(st_bypass) : 0.0, st_bypass_max_batch, (unsigned long long)st_filed_wheel,
+			st_max_pass_ns / 1e6);
+	}
+#endif
 	std::uint64_t filed = 0;                 // LOG thread only: deferred lines filed so far
 	std::vector<Head> heads;                 // LOG thread only: each queue's next line, during a pass
 	long written = 0;                        // LOG thread only: queued lines written this pass
@@ -990,6 +1002,11 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 		Logging& l = *task;
 		l.wheel_hold = std::move(task);
 		if (due <= pass_now) {
+#ifdef WAB_STATS
+			++st_bypass;
+			st_bypass_late_ns += pass_now - due;
+			st_bypass_max_batch = std::max(st_bypass_max_batch, batch.size() - batch_at);
+#endif
 			Deferred d{due, created, &l};
 			batch.insert(std::upper_bound(batch.begin() + static_cast<std::ptrdiff_t>(batch_at), batch.end(), d, earlier_deferred),
 				d);
@@ -998,6 +1015,9 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 		l.fire = [](wheel::timer_entry& e, bool) noexcept {   // the wheel's destruction: release it
 			static_cast<Logging&>(e).wheel_hold.reset();
 		};
+#ifdef WAB_STATS
+		++st_filed_wheel;
+#endif
 		wheel_->arm(l, static_cast<std::uint64_t>(due));
 	}
 
@@ -1032,6 +1052,11 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 				batch.push_back({static_cast<std::int64_t>(e.deadline), l.atom_created_at.load().time_since_epoch().count(), &l});
 			});
 			std::sort(batch.begin(), batch.end(), earlier_deferred);
+#ifdef WAB_STATS
+			++st_passes;
+			st_expired += batch.size();
+			st_max_expired = std::max(st_max_expired, batch.size());
+#endif
 		}
 		heads.clear();
 		auto* first = ring_list.load(std::memory_order_acquire);
@@ -1137,6 +1162,9 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 		while (pass(all, all, now)) {   // every queued line, and the deferred lines due by now
 		}
 		final_done.store(true, std::memory_order_release);
+#ifdef WAB_STATS
+		print_stats();
+#endif
 		wheel_.reset();   // releases what is still filed
 	}
 

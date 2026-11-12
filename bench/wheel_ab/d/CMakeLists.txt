@@ -31,6 +31,14 @@ target_compile_features(logger_wheel_ab_d PRIVATE cxx_std_20)
 target_compile_definitions(logger_wheel_ab_d PRIVATE WAB_ARM_D)
 target_link_libraries(logger_wheel_ab_d PRIVATE scheduler::scheduler term_color::term_color wheel::wheel)
 
+# (D) with the LOG thread's counters printed to stderr when it closes (`run.sh stats-d`).
+add_executable(logger_wheel_ab_d_stats "${ROOT}/bench/wheel_ab/ab.cc" logger.cc)
+target_include_directories(logger_wheel_ab_d_stats BEFORE PRIVATE "${CMAKE_CURRENT_LIST_DIR}")
+target_include_directories(logger_wheel_ab_d_stats PRIVATE "${cppcodec_SOURCE_DIR}")
+target_compile_features(logger_wheel_ab_d_stats PRIVATE cxx_std_20)
+target_compile_definitions(logger_wheel_ab_d_stats PRIVATE WAB_ARM_D WAB_STATS)
+target_link_libraries(logger_wheel_ab_d_stats PRIVATE scheduler::scheduler term_color::term_color wheel::wheel)
+
 # Sizes of the record in each arm, printed by `run.sh sizeof`.
 add_executable(sizeof_a "${ROOT}/bench/wheel_ab/sizeof.cc")
 target_link_libraries(sizeof_a PRIVATE logger)
