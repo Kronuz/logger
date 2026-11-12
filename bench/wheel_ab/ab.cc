@@ -4,7 +4,10 @@
 // Built as logger_wheel_ab_c (WAB_ARM_C, against bench/wheel_ab/c's copy of logger whose LOG thread
 // files deferred lines in a wheel), its one backend is C, which runs (A)'s calls.
 //
-// Usage: logger_wheel_ab --backend A|B|C --pattern 1|2|3 --producers P [--formatted] [--check]
+// Built as logger_wheel_ab_d (WAB_ARM_D, against bench/wheel_ab/d, built by d/CMakeLists.txt), its
+// one backend is D: the same, with a slimmer record.
+//
+// Usage: logger_wheel_ab --backend A|B|C|D --pattern 1|2|3 --producers P [--formatted] [--check]
 //                        [--rounds N] [--bursts N] [--pause-ms N]
 // Prints the effective configuration, then one JSON line with the run's metrics. --check also
 // verifies every line was written exactly once, none early, and no cleared line; it exits 1 if not.
@@ -632,6 +635,8 @@ int main(int argc, char** argv) {
 	}
 #if defined(WAB_ARM_C)
 	const bool backend_ok = cfg.backend == 'C';
+#elif defined(WAB_ARM_D)
+	const bool backend_ok = cfg.backend == 'D';
 #else
 	const bool backend_ok = cfg.backend == 'A' || cfg.backend == 'B';
 #endif
