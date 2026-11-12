@@ -77,7 +77,8 @@ dedup, stacked indentation, and the iTerm2 integration.
 ## 📦 Installation
 
 Requires a C++20 compiler and CMake 3.14 or newer; it fetches
-[scheduler](https://github.com/Kronuz/scheduler) (with threadpool and stash),
+[wheel](https://github.com/Kronuz/wheel) (the timer wheel deferred lines wait in),
+[scheduler](https://github.com/Kronuz/scheduler) (for its threadpool's thread),
 term-color, and the header-only cppcodec, and compiles one source file. CI builds
 it on Linux (x86_64, arm64), macOS (arm64, x86_64), and FreeBSD, plus ASan,
 UBSan, and TSan builds.
@@ -109,6 +110,9 @@ Not for:
   is written at once, but one logged while lines are pending waits for the next
   1 ms batch, so a hard crash within that millisecond loses it; `Logging::finish()`
   drains the queues before exit.
+- **Sub-millisecond deferred timing.** A deferred line waits in a timer wheel of
+  1 ms slots: it is never written before its due time, and is written by the end
+  of its slot plus the LOG thread's wake, about 1 ms late.
 - **One order across severities.** Lines more severe than `LOG_ERR`, and lines
   due at once that are logged after `Logging::finish()` begins, are written at
   the call and can come out ahead of routine lines logged before them. Routine
