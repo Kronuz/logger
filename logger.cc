@@ -702,7 +702,7 @@ SysLog::log(int priority, std::string_view str, bool with_priority, bool /*with_
 //
 // Each thread that logs owns a queue: a byte ring it writes records into (a routine line's message
 // in place, or a reference to a full record) and publishes with one store of its write index. The
-// LOG thread reads every queue, files deferred lines into a heap by due time, and writes the lines
+// LOG thread reads every queue, files deferred lines in a wheel by due time, and writes the lines
 // in the order of their calls: it merges the queues by the clock reading each line was stamped with,
 // and only lines stamped before it began a look, so a line is never written ahead of one that was
 // logged before it and was not yet visible. See ARCHITECTURE.md.
@@ -757,6 +757,7 @@ static std::int64_t steady_ns(std::chrono::steady_clock::time_point t) noexcept 
 }
 
 constexpr std::int64_t kTickNs = 1'000'000;   // the batching tick, kCoalesce
+constexpr std::int64_t kWakeSlackNs = 8 * kTickNs;   // a push due within this of the sleep's end wakes the LOG thread
 
 // A queued line's due time and call time, in steady_clock nanoseconds.
 static void line_key(const LineRecord* l, std::int64_t& due, std::int64_t& created) noexcept {
@@ -871,8 +872,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	struct Deferred {
 		std::int64_t due;
 		std::int64_t created;
-		std::uint64_t seq;
-		std::shared_ptr<Logging> task;
+		Logging* record;   // filed: its wheel_hold keeps it alive until it is written or dropped
 	};
 	// A queue's next line: its key is (due, call time).
 	struct Head {
@@ -884,18 +884,23 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	static bool later(const Head& a, const Head& b) noexcept {
 		return a.due != b.due ? a.due > b.due : a.created > b.created;
 	}
-	static bool later_deferred(const Deferred& a, const Deferred& b) noexcept {
-		if (a.due != b.due) {
-			return a.due > b.due;
-		}
-		return a.created != b.created ? a.created > b.created : a.seq > b.seq;
+	// Batch order: the earliest first.
+	static bool earlier_deferred(const Deferred& a, const Deferred& b) noexcept {
+		return a.due != b.due ? a.due < b.due : a.created < b.created;
 	}
 
 	std::mutex mtx;
 	std::condition_variable cv;
 	std::atomic<int> ending{-1};             // finish()'s countdown of passes; -1 until it begins
 	std::atomic<bool> final_done{false};     // the last look at the queues is over
-	std::vector<Deferred> deferred;          // LOG thread only: deferred lines, a heap by due time
+	// LOG thread only: deferred lines filed in a wheel by due time; a pass takes the due ones into
+	// `batch`, sorted by (due, created), and merges it with the queues' lines.
+	std::unique_ptr<wheel::timer_wheel> wheel_ = std::make_unique<wheel::timer_wheel>(
+		static_cast<std::uint64_t>(steady_ns(std::chrono::steady_clock::now())));
+	std::vector<Deferred> batch;
+	std::size_t batch_at = 0;
+	std::int64_t pass_now = std::numeric_limits<std::int64_t>::min();   // during a pass: its `now`
+	bool hot = false;                        // LOG thread only: the last passes filed deferred lines
 	std::uint64_t filed = 0;                 // LOG thread only: deferred lines filed so far
 	std::vector<Head> heads;                 // LOG thread only: each queue's next line, during a pass
 	long written = 0;                        // LOG thread only: queued lines written this pass
@@ -930,8 +935,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 			if (kind == kRecTask) {
 				auto* t = reinterpret_cast<TaskRecord*>(p);
 				if (t->ordered == 0) {
-					deferred.push_back({t->due, t->created, ++filed, std::move(t->task)});
-					std::push_heap(deferred.begin(), deferred.end(), later_deferred);
+					file_deferred(std::move(t->task), t->due, t->created);
 					t->~TaskRecord();
 					g.r += size;
 					continue;
@@ -968,7 +972,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 
 	static void fire(std::shared_ptr<Logging>& task) {
 		if (*task && task->clear(true)) {
-			static_cast<Logging::Base&>(*task)();   // skips a task its handle cancelled meanwhile
+			task->run();   // skips a task its handle cancelled meanwhile
 		}
 	}
 
@@ -979,11 +983,37 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 		Logging::emit(line);
 	}
 
-	// Drops cancelled lines from the top of the deferred heap.
+	// Files a deferred line in the wheel, or, already due during a pass, straight into its batch.
+	void file_deferred(std::shared_ptr<Logging>&& task, std::int64_t due, std::int64_t created) {
+		++filed;
+		if (!wheel_) {
+			return;   // after the last look: released
+		}
+		Logging& l = *task;
+		l.wheel_hold = std::move(task);
+		if (due <= pass_now) {
+			Deferred d{due, created, &l};
+			batch.insert(std::upper_bound(batch.begin() + static_cast<std::ptrdiff_t>(batch_at), batch.end(), d, earlier_deferred),
+				d);
+			return;
+		}
+		l.fire = [](wheel::timer_entry& e, bool) noexcept {   // the wheel's destruction: release it
+			static_cast<Logging&>(e).wheel_hold.reset();
+		};
+		wheel_->arm(l, static_cast<std::uint64_t>(due));
+	}
+
+	// When the wheel next has due lines (the end of their 1 ms slot), or never.
+	std::int64_t wheel_next() const noexcept {
+		const std::uint64_t n = wheel_ ? wheel_->next() : wheel::timer_wheel::never;
+		return n >= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ? std::numeric_limits<std::int64_t>::max()
+			: static_cast<std::int64_t>(n);
+	}
+
+	// Drops cancelled lines from the front of the batch.
 	void purge() {
-		while (!deferred.empty() && !*deferred.front().task) {
-			std::pop_heap(deferred.begin(), deferred.end(), later_deferred);
-			deferred.pop_back();
+		while (batch_at < batch.size() && !*batch[batch_at].record) {
+			batch[batch_at++].record->wheel_hold.reset();
 		}
 	}
 
@@ -995,6 +1025,16 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	bool pass(std::int64_t gate, std::int64_t ring_due, std::int64_t now) {
 		bool worked = false;
 		std::int64_t later_head = std::numeric_limits<std::int64_t>::max();
+		pass_now = now;
+		batch.clear();
+		batch_at = 0;
+		if (wheel_) {
+			wheel_->expire(static_cast<std::uint64_t>(now), [this](wheel::timer_entry& e) {
+				Logging& l = static_cast<Logging&>(e);
+				batch.push_back({static_cast<std::int64_t>(e.deadline), l.atom_created_at.load().time_since_epoch().count(), &l});
+			});
+			std::sort(batch.begin(), batch.end(), earlier_deferred);
+		}
 		heads.clear();
 		auto* first = ring_list.load(std::memory_order_acquire);
 		for (auto* g = first; g != nullptr; g = g->next_ring) {
@@ -1013,7 +1053,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 		for (;;) {
 			purge();
 			const bool ring = !heads.empty();
-			const bool heap = !deferred.empty() && deferred.front().due <= now;
+			const bool heap = batch_at < batch.size();
 			if (!ring && !heap) {
 				break;
 			}
@@ -1021,7 +1061,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 			bool take_ring = ring;
 			if (ring && heap) {
 				const auto& a = heads.front();
-				const auto& d = deferred.front();
+				const auto& d = batch[batch_at];
 				take_ring = a.due != d.due ? a.due < d.due : a.created <= d.created;
 			}
 			if (take_ring) {
@@ -1039,9 +1079,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 					}
 				}
 			} else {
-				std::pop_heap(deferred.begin(), deferred.end(), later_deferred);
-				auto task = std::move(deferred.back().task);
-				deferred.pop_back();
+				auto task = std::move(batch[batch_at++].record->wheel_hold);
 				fire(task);
 			}
 		}
@@ -1056,8 +1094,10 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 			Logging::completed_.n.fetch_add(written, std::memory_order_release);
 			written = 0;
 		}
-		purge();
-		next_due = deferred.empty() ? later_head : std::min(later_head, deferred.front().due);
+		batch.clear();
+		batch_at = 0;
+		pass_now = std::numeric_limits<std::int64_t>::min();
+		next_due = std::min(later_head, wheel_next());
 		return worked;
 	}
 
@@ -1085,9 +1125,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 				e = std::min(e, h.due);
 			}
 		}
-		if (!deferred.empty()) {
-			e = std::min(e, deferred.front().due);   // a cancelled top only wakes it early
-		}
+		e = std::min(e, wheel_next());   // a cancelled line only wakes it early
 		return e;
 	}
 
@@ -1101,10 +1139,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 		while (pass(all, all, now)) {   // every queued line, and the deferred lines due by now
 		}
 		final_done.store(true, std::memory_order_release);
-		for (auto& d : deferred) {
-			d.task.reset();
-		}
-		deferred.clear();
+		wheel_.reset();   // releases what is still filed
 	}
 
 	LogWorker() = default;
@@ -1144,7 +1179,8 @@ public:
 
 	// Wakes the LOG thread if it sleeps past `due` (steady_clock nanoseconds).
 	void wake_for(std::int64_t due) noexcept {
-		if (due < worker_wake.load(std::memory_order_relaxed)
+		// Slack: a timed wait wakes late, and a line due just after the wake would be filed already due.
+		if (due - kWakeSlackNs < worker_wake.load(std::memory_order_relaxed)
 				&& (worker_state.fetch_and(~kSleeping, std::memory_order_seq_cst) & kSleeping) != 0) {
 			std::lock_guard<std::mutex> lk(mtx);
 			cv.notify_one();
@@ -1232,7 +1268,7 @@ public:
 						break;
 					}
 				}
-				if (ending.load() == 0 || (!queued() && deferred.empty())) {
+				if (ending.load() == 0 || (!queued() && (!wheel_ || wheel_->size() == 0))) {
 					break;
 				}
 				const auto until = std::min(next_due, steady_ns(steady_clock::now() + 100ms));
@@ -1241,7 +1277,9 @@ public:
 				continue;
 			}
 			const auto t = steady_ns(steady_clock::now());
+			const auto filed_before = filed;
 			if (pass(t, t, t)) {
+				hot |= filed != filed_before;
 				continue;   // it wrote or filed lines: look again at once
 			}
 			// Nothing due: sleep until the earliest line it knows of. A producer that queues one due
@@ -1250,7 +1288,10 @@ public:
 			if ((worker_state.load(std::memory_order_relaxed) & kStopping) != 0) {
 				continue;
 			}
-			const auto until = next_due;
+			// After filing lines, sleep at most one tick: more are likely in the queues, and filed late
+			// they would be due already.
+			const auto until = hot ? std::min(next_due, t + kTickNs) : next_due;
+			hot = false;
 			worker_wake.store(until, std::memory_order_relaxed);
 			worker_state.fetch_or(kSleeping, std::memory_order_seq_cst);
 			std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -1386,12 +1427,14 @@ Logging::Logging(std::string&& str_, bool clears_, bool async_, bool info_, uint
 		std::exception_ptr eptr_, std::source_location loc_,
 		std::chrono::steady_clock::time_point created_at,
 		std::chrono::system_clock::time_point timestamp_)
-	: Base(created_at),
+	: atom_created_at(created_at),
+	  atom_cleared_at(std::chrono::steady_clock::time_point{}),
 	  str(std::move(str_)),
 	  priority(priority_),
 	  clears(clears_),
 	  async(async_),
 	  info(info_),
+	  atom_cancelled(false),
 	  once(once_),
 	  eptr(std::move(eptr_)),
 	  thread_id(std::this_thread::get_id()),
@@ -1408,12 +1451,14 @@ Logging::Logging(std::string&& str_, bool clears_, bool async_, bool info_, uint
 		std::source_location loc_,
 		std::chrono::steady_clock::time_point created_at,
 		std::chrono::system_clock::time_point timestamp_)
-	: Base(created_at),
+	: atom_created_at(created_at),
+	  atom_cleared_at(std::chrono::steady_clock::time_point{}),
 	  str(std::move(str_)),
 	  priority(priority_),
 	  clears(clears_),
 	  async(async_),
 	  info(info_),
+	  atom_cancelled(false),
 	  once(once_),
 	  thread_id(std::this_thread::get_id()),
 	  loc(loc_),
@@ -1639,7 +1684,7 @@ Logging::add_line(std::chrono::steady_clock::time_point wakeup, Msg&& str, bool 
 			} else if (due || priority < LOG_NOTICE) {
 				// Async with no delay, or severe (what backpressure never drops):
 				// write it now, synchronously.
-				entry->Base::clear(true);   // fired: a later clean() keeps its swap
+				entry->claim(true);   // fired: a later clean() keeps its swap
 				(*entry)();
 			}
 			// Else a routine deferred line that does not clear: lost, as before.
@@ -1752,7 +1797,7 @@ Logging::clean()
 		// swap message too. If it already fired, clear(true) loses the one-shot
 		// CAS and the swap below still runs.
 		auto late = refused_late();
-		if (Base::clear(true)) {
+		if (claim(true)) {
 			if (late) {
 				// Refused by the queue, and the work outlasted the delay: write
 				// it now, as the LOG thread would have, and keep the swap.
@@ -1786,7 +1831,7 @@ Logging::clear(bool internal)
 		unlog_str.clear();
 	}
 	auto late = refused_late();
-	if (!Base::clear(internal)) {
+	if (!claim(internal)) {
 		return false;
 	}
 	if (late) {

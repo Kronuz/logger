@@ -47,7 +47,8 @@
 #include <mach/mach_time.h>   // for mach_continuous_time
 #endif
 
-#include "scheduler.h"   // for Scheduler, ScheduledTask, ThreadPolicyType
+#include "thread.hh"   // for Thread, ThreadPolicyType (the LOG thread)
+#include "wheel.hh"    // for wheel::timer_entry (the LOG thread files deferred lines in a wheel::timer_wheel)
 
 
 #define DEFAULT_LOG_LEVEL LOG_WARNING       // emitted when priority <= this
@@ -552,14 +553,13 @@ struct Emit;
 }
 
 // One log entry kept as a full record: a line the macros' fast path does not take (a deferred or
-// cancellable line, an exception, a line logged through do_log). It is a ScheduledTask, whose one-shot
-// clear() decides between the LOG thread writing it and its handle cancelling it. The LOG thread fires
-// operator(), which writes the line. See ARCHITECTURE.md.
-class Logging : public ScheduledTask<Scheduler<Logging, ThreadPolicyType::logging>, Logging, ThreadPolicyType::logging> {
+// cancellable line, an exception, a line logged through do_log). Its one-shot clear() decides between
+// the LOG thread writing it and its handle cancelling it. The LOG thread fires operator(), which
+// writes the line. A deferred line's record is the LOG thread's wheel entry while filed. See
+// ARCHITECTURE.md.
+class Logging : private wheel::timer_entry {
 	friend class Log;
 	friend class logger_detail::LogWorker;
-
-	using Base = ScheduledTask<Scheduler<Logging, ThreadPolicyType::logging>, Logging, ThreadPolicyType::logging>;
 
 	// Lines that left the queues and lines dropped, each counter on its own cache line. Producers
 	// count the lines they queue in their own queue's `posted`; the LOG thread (and a full record's
@@ -572,11 +572,16 @@ class Logging : public ScheduledTask<Scheduler<Logging, ThreadPolicyType::loggin
 
 	static void emit(const logger_detail::Emit& line);   // decorates a line and writes it to every handler
 
+	// The one-shot: created_at, cleared_at (the claim) and a user cancel's flag, which the LOG thread
+	// re-reads before writing.
+	std::atomic<std::chrono::steady_clock::time_point> atom_created_at;
+	std::atomic<std::chrono::steady_clock::time_point> atom_cleared_at;
 	std::string str;
 	int priority;
 	bool clears;        // cancel the scheduled line when the handle is cleaned
 	bool async;         // offloaded to the LOG thread (vs. inline on the caller)
 	bool info;          // decorate with timestamp / thread / location
+	std::atomic_bool atom_cancelled;   // set by a user clear(); a cancelled record is never written
 	uint64_t once;      // dedup token; 0 = no dedup
 	std::exception_ptr eptr;
 	std::thread::id thread_id;
@@ -593,6 +598,21 @@ class Logging : public ScheduledTask<Scheduler<Logging, ThreadPolicyType::loggin
 	// The message that replaces this one when the handle is cleaned (the "swap").
 	std::string unlog_str;
 	int unlog_priority;
+
+	// Keeps the record alive while it is filed in the LOG thread's wheel (the entry's deadline is
+	// its due time, atom_created_at its call time).
+	std::shared_ptr<Logging> wheel_hold;
+
+	operator bool() const noexcept { return atom_cleared_at.load() == std::chrono::steady_clock::time_point{}; }
+	bool cancelled() const noexcept { return atom_cancelled.load(std::memory_order_acquire); }
+	void run() { if (!cancelled()) { (*this)(); } }   // writes the line unless a user clear() landed
+	bool claim(bool internal) noexcept {              // the one-shot: a user clear() also records intent
+		if (!internal) {
+			atom_cancelled.store(true, std::memory_order_release);
+		}
+		std::chrono::steady_clock::time_point c;
+		return atom_cleared_at.compare_exchange_strong(c, std::chrono::steady_clock::now());
+	}
 
 	Logging(const Logging&) = delete;
 	Logging& operator=(const Logging&) = delete;

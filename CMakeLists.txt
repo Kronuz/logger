@@ -4,12 +4,18 @@ project(logger LANGUAGES CXX)
 include(FetchContent)
 
 # --- Dependencies ---
-# The logger is built on the already-extracted scheduler, which itself pulls in
-# threadpool + stash (the lock-free hierarchical timer wheel). The async and
-# deferred log paths run on that scheduler; the immediate path does not touch it.
-# See ARCHITECTURE.md. The richer host-specific bits (exception describe, real
-# backtraces, named threads) still come in through hooks with std defaults, so a
-# consumer re-injects them via an adapter.
+# wheel: the single-owner timer wheel the LOG thread files deferred lines in (header-only).
+FetchContent_Declare(
+  wheel
+  GIT_REPOSITORY https://github.com/Kronuz/wheel.git
+  GIT_TAG        bfd72bc13395e4a232701e752be97ccd236530fc
+)
+FetchContent_MakeAvailable(wheel)
+
+# scheduler: its threadpool's Thread runs the LOG thread; the frozen copy in test/frozen
+# uses the scheduler itself. The richer host-specific bits (exception describe, real
+# backtraces, named threads) come in through hooks with std defaults, so a consumer
+# re-injects them via an adapter.
 FetchContent_Declare(
   scheduler
   GIT_REPOSITORY https://github.com/Kronuz/scheduler.git
@@ -45,7 +51,7 @@ add_library(logger STATIC logger.cc)
 target_include_directories(logger PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(logger PRIVATE "${cppcodec_SOURCE_DIR}")
 target_compile_features(logger PUBLIC cxx_std_20)
-target_link_libraries(logger PUBLIC scheduler::scheduler term_color::term_color)
+target_link_libraries(logger PUBLIC scheduler::scheduler term_color::term_color wheel::wheel)
 add_library(logger::logger ALIAS logger)
 
 # Build the smoke test only when this repo is the top-level project, so
@@ -87,6 +93,14 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_executable(logger_producer_test test/producer.cc)
   target_link_libraries(logger_producer_test PRIVATE logger)
   add_test(NAME logger_producer COMMAND logger_producer_test)
+
+  # Deferred lines on the LOG thread's wheel: once, in order, never early, within a tick plus a wake;
+  # and the same under eight producers with cancelled and ring lines mixed in.
+  add_executable(logger_deferred_test test/deferred.cc)
+  target_link_libraries(logger_deferred_test PRIVATE logger)
+  add_test(NAME logger_deferred COMMAND logger_deferred_test)
+  set_tests_properties(logger_deferred PROPERTIES RUN_SERIAL TRUE)   # a lateness bound
+  add_test(NAME logger_deferred_stress COMMAND logger_deferred_test stress)
 
   # How soon a routine line is written: at once when nothing is pending, in the 1 ms batch otherwise.
   add_executable(logger_wake_test test/wake.cc)
@@ -157,14 +171,10 @@ if(LOGGER_BUILD_BENCH AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(logger_latency PRIVATE logger)
 endif()
 
-# logger's scheduling on its own queues against a prototype on Kronuz/wheel (opt-in; the wheel is
-# fetched only here). docs/perf/wheel-ab.md has the method and the rule; bench/wheel_ab/run.sh runs it.
-option(LOGGER_BUILD_WHEEL_AB "Build bench/wheel_ab (fetches Kronuz/wheel)" OFF)
+# logger's scheduling on its own queues against a prototype on Kronuz/wheel (opt-in).
+# docs/perf/wheel-ab.md has the method and the rule; bench/wheel_ab/run.sh runs it.
+option(LOGGER_BUILD_WHEEL_AB "Build bench/wheel_ab" OFF)
 if(LOGGER_BUILD_WHEEL_AB AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-  FetchContent_Declare(wheel
-    GIT_REPOSITORY https://github.com/Kronuz/wheel.git
-    GIT_TAG        50665c849fb24e193afc757a258ec8403901071c)
-  FetchContent_MakeAvailable(wheel)
   add_executable(logger_wheel_ab bench/wheel_ab/ab.cc)
   target_link_libraries(logger_wheel_ab PRIVATE logger wheel::wheel)
   # Arm (C): bench/wheel_ab/c's copy of logger, whose LOG thread files deferred lines in a wheel it

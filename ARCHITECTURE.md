@@ -26,7 +26,7 @@ L_EMERG / L_ALERT / L_CRIT --- inline --------------------------------------> si
 L_ERR / L_WARNING / L_INFO --> the thread's queue: the line, formatted ---\
                                                                            >-- merge --> write
 L_DELAYED(100ms, ...)      --> a Logging record; the thread's queue    ---/   (deferred lines
-                               holds a reference to it                          wait in a heap)
+                               holds a reference to it                          wait in a wheel)
                                      |
                                      +-- clear() / unlog() can cancel or swap it before it fires
 ```
@@ -50,7 +50,7 @@ L_DELAYED(100ms, ...)      --> a Logging record; the thread's queue    ---/   (d
    written in the same order.
 
 3. **Deferred, future.** A `Logging` record due at `now + delay`, referenced from
-   the thread's queue; the LOG thread files it in a heap by due time and fires it
+   the thread's queue; the LOG thread files it in its timer wheel and fires it
    when the delay elapses, unless someone cancels it first. This is the "log slow
    operations only" path: arm a "this took too long" line 100 ms out, and cancel it
    when the operation finishes in time. Most of the time it finishes in time, so
@@ -89,7 +89,7 @@ thread reads the old one to its end and frees it). A queue never blocks its
 producer and never drops a line; `max_pending` is the bound.
 
 The LOG thread is one thread with its own loop. Each pass reads its clock, files
-the deferred records it finds into the heap, and writes, in order of due time
+the deferred records it finds into its wheel, and writes, in order of due time
 (and of call time within a due time), every queued line due by then and every
 deferred line due by then. It takes only lines stamped before the pass began, so a
 line is never written ahead of one logged before it that was not yet visible. When
@@ -120,9 +120,42 @@ released. A producer that published just then sees the LOG thread closed and
 writes its line itself, unless the last look got it. At exit, if `finish()` was
 never called, a static's destructor does the same with one pass.
 
-`Logging` is a `ScheduledTask` from [Kronuz/scheduler](https://github.com/Kronuz/scheduler)
-for its one-shot cancel, and the LOG thread is a `Thread` from it; the scheduler's
-wheel and its own thread are not used.
+## Deferred lines ride the LOG thread's wheel
+
+A deferred line waits in a `wheel::timer_wheel` from [Kronuz/wheel](https://github.com/Kronuz/wheel)
+that the LOG thread owns; no other thread touches it, so it takes no lock and no atomic. `Logging`
+derives from `wheel::timer_entry`, so the record is its own entry: filing it allocates nothing,
+and the entry the wheel hands back is the record by a `static_cast`. The entry's deadline is the
+line's due time and the record's `created_at` its call time; the record holds a `shared_ptr` to
+itself while filed, because the wheel does not own what it files and a cancelled line's handle may
+be gone. The one-shot cancel (`created_at`, `cleared_at` and a user cancel's flag) is the record's
+own three atomics.
+
+Each pass calls `expire(now)` and sorts the lines it hands back by (due time, call time), then
+merges that batch with the queues' lines. A line already due when the LOG thread files it skips
+the wheel and is put into the batch in order. A cancelled line stays filed until its slot comes
+and is dropped then. The LOG thread sleeps until `next()`, the end of the next occupied slot.
+There is no second timer structure: the queues' merge is a heap of each queue's next line,
+rebuilt every pass, and holds nothing between passes.
+
+The resolution is the wheel's: 1 ms slots. A deferred line is never written before its due time,
+and is written by the end of its 1 ms slot plus the LOG thread's timed wake, so it is about 1 ms
+later than a heap that wakes at the exact due time would write it (lateness p99 1.31 to 1.37 ms
+against 0.07 to 0.32 ms for lines deferred 100 ms to 1 s, `docs/perf/wheel-ab.md`, "Arm D,
+fixed"). That is the price of one timer mechanism across the libraries (Detent's D72 and D86):
+the deferred line is a "this is taking too long" warning 100 ms or more out, where 1 ms is below
+anything a reader can see, and in exchange the LOG thread uses 0.34 to 0.44 times the heap's CPU
+when lines are deferred far out, producers pay the same per call (median 0.96 to 1.08 times), and
+a deferred line costs 8 more heap bytes. `test/deferred.cc` holds the bound.
+
+Two rules keep the LOG thread filing lines before they are due, so the batch takes no inserts:
+
+1. After a pass that filed lines, it sleeps at most one tick: more are likely in the queues.
+2. A producer whose line is due within 8 ms of the LOG thread's wake wakes it, because a timed
+   wait returns late and a line due just after it would otherwise be filed already due.
+
+The LOG thread is a `Thread` from [Kronuz/threadpool](https://github.com/Kronuz/threadpool)
+(fetched through the scheduler's pin).
 
 ## The sinks
 
@@ -138,7 +171,7 @@ A record's `Log` handle owns the two operations that make the pattern work:
   wins, the caller cancelling or the LOG thread firing, the other becomes a no-op.
   So a fast operation that finishes and drops its handle cancels its own "too
   slow" warning with one atomic, and the warning never reaches the output. The
-  LOG thread drops cancelled records from the top of its heap.
+  LOG thread drops a cancelled record when its slot comes.
 - **`unlog()`** swaps the message. You arm "operation X timed out" for the future,
   and when X finishes you replace it with "operation X took 87 ms." If X never
   finishes, the timeout line stands.
