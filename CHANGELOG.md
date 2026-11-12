@@ -5,6 +5,21 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Upgrading a pin from before 2026-10-30: [the consumer upgrade note](https://github.com/Kronuz/cpp-libraries/blob/main/docs/UPGRADING-2026-10.md#logger) lists what changes for callers, how to find affected inputs, the commits not to pin, and the speedup.
 
+## 2026-11-12 (deferred lines on Kronuz/wheel)
+
+### Changed
+
+- Deferred lines wait in a `wheel::timer_wheel` ([Kronuz/wheel](https://github.com/Kronuz/wheel),
+  pinned at `bfd72bc`) that the LOG thread owns, instead of its heap. `Logging` is the wheel's
+  entry and holds its own one-shot cancel (it is no longer a scheduler `ScheduledTask`), so filing
+  a line allocates nothing; each pass sorts the lines the wheel hands back and merges them with the
+  queues'. The LOG thread sleeps at most a tick after a pass that filed lines, and a producer
+  whose line is due within 8 ms of the LOG thread's wake wakes it, so lines are filed before they
+  are due. A deferred line is never written early and is written by the end of its 1 ms slot plus
+  the LOG thread's wake: about 1 ms later than the heap wrote it. `sizeof(Logging)` is 192 bytes
+  (184 before). Producer cost, heap and LOG CPU are in `docs/perf/wheel-port.md`.
+- `logger.h` includes threadpool's `thread.hh` instead of `scheduler.h`.
+
 ## 2026-11-01 (per-thread queues)
 
 ### Changed
