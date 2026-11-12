@@ -1,7 +1,10 @@
 // logger's three scheduling patterns on (A) logger as it is and (B) a prototype on
 // wheel::timer_wheel, one backend per process. docs/perf/wheel-ab.md has the method and the rule.
 //
-// Usage: logger_wheel_ab --backend A|B --pattern 1|2|3 --producers P [--formatted] [--check]
+// Built as logger_wheel_ab_c (WAB_ARM_C, against bench/wheel_ab/c's copy of logger whose LOG thread
+// files deferred lines in a wheel), its one backend is C, which runs (A)'s calls.
+//
+// Usage: logger_wheel_ab --backend A|B|C --pattern 1|2|3 --producers P [--formatted] [--check]
 //                        [--rounds N] [--bursts N] [--pause-ms N]
 // Prints the effective configuration, then one JSON line with the run's metrics. --check also
 // verifies every line was written exactly once, none early, and no cleared line; it exits 1 if not.
@@ -351,6 +354,7 @@ static wab::WheelLog* wlog = nullptr;
 // Check mode: per id, the times it was written and the clock before its call.
 static std::unique_ptr<std::atomic<std::uint8_t>[]> hits;
 static std::unique_ptr<std::int64_t[]> pre;
+static std::unique_ptr<std::int64_t[]> post;   // the clock after its call: its due lies in [pre, post] + delay
 
 struct SinkState {
 	alignas(128) std::atomic<long> sunk{0};
@@ -358,8 +362,9 @@ struct SinkState {
 	std::atomic<mach_port_t> port{0};
 	pthread_t tid{};
 	std::vector<std::int64_t> lags;   // ns, written lines of measured rounds
-	long early = 0, inversions = 0, bad_id = 0, other_thread = 0;
+	long early = 0, inversions = 0, due_inversions = 0, bad_id = 0, other_thread = 0;
 	std::vector<std::int64_t> last_seq;
+	std::int64_t max_due_lo = std::numeric_limits<std::int64_t>::min();   // the latest due lower bound written
 };
 static SinkState sink;
 
@@ -395,6 +400,12 @@ static void on_line(std::string_view s) {
 					} else {
 						sink.last_seq[th] = static_cast<std::int64_t>(seq);
 					}
+				} else {
+					// Due order: a line whose due is surely earlier than one written before it.
+					if (post[i] + delay_of(id) < sink.max_due_lo) {
+						++sink.due_inversions;
+					}
+					sink.max_due_lo = std::max(sink.max_due_lo, pre[i] + delay_of(id));
 				}
 			}
 		} else {
@@ -519,6 +530,9 @@ static void produce(Producer& p) {
 					} else {
 						call_b<Pattern, Formatted>(p, id);
 					}
+					if (cfg.check) {
+						post[p.index * per_producer + p.seq] = now_ns();
+					}
 					++p.seq;
 				}
 				const std::int64_t t1 = now_ns();
@@ -613,7 +627,12 @@ int main(int argc, char** argv) {
 			usage();
 		}
 	}
-	if ((cfg.backend != 'A' && cfg.backend != 'B') || cfg.pattern < 1 || cfg.pattern > 3 || cfg.producers < 1
+#if defined(WAB_ARM_C)
+	const bool backend_ok = cfg.backend == 'C';
+#else
+	const bool backend_ok = cfg.backend == 'A' || cfg.backend == 'B';
+#endif
+	if (!backend_ok || cfg.pattern < 1 || cfg.pattern > 3 || cfg.producers < 1
 			|| cfg.producers > 64 || (cfg.formatted && (cfg.pattern != 1 || cfg.check)) || cfg.burst % kBlock != 0) {
 		usage();
 	}
@@ -644,6 +663,7 @@ int main(int argc, char** argv) {
 	if (cfg.check) {
 		hits = std::make_unique<std::atomic<std::uint8_t>[]>(per_producer * P);
 		pre = std::make_unique<std::int64_t[]>(per_producer * P);
+		post = std::make_unique<std::int64_t[]>(per_producer * P);
 	}
 	std::printf("config backend=%c pattern=%d producers=%u formatted=%d check=%d rounds=%d bursts=%d burst=%d pause_ms=%d"
 		" block=%d log_level=%d with_timestamp=%d wheel=50665c8 sizeof_rec=%zu sizeof_logging=%zu\n",
@@ -658,12 +678,30 @@ int main(int argc, char** argv) {
 	std::barrier<> b(static_cast<std::ptrdiff_t>(P + 1));
 	bar = &b;
 	std::vector<std::thread> ts;
-	if (cfg.backend == 'A') {
-		start_producers<'A'>(ts);
-	} else {
+	if (cfg.backend == 'B') {
 		start_producers<'B'>(ts);
+	} else {
+		start_producers<'A'>(ts);   // (C) runs (A)'s calls against its copy of logger
 	}
-	auto pending = [] { return cfg.backend == 'A' ? Logging::pending_count() : pending_b(); };
+	auto pending = [] { return cfg.backend == 'B' ? pending_b() : Logging::pending_count(); };
+	// Lines the scheduler holds over the measured rounds (filed, cancelled or not), every 1 ms: the
+	// peak, and the integral (line-milliseconds) per call, i.e. how long a call's line stays filed.
+	std::atomic<bool> sampling{true};
+	double held_ms = 0;
+	long held_peak = 0;
+	std::thread sampler([&] {
+		std::int64_t last = now_ns();
+		while (sampling.load(std::memory_order_relaxed)) {
+			std::this_thread::sleep_for(1ms);
+			const std::int64_t t = now_ns();
+			if (sink.measuring.load(std::memory_order_relaxed)) {
+				const long n = pending();
+				held_ms += static_cast<double>(n) * static_cast<double>(t - last) / 1e6;
+				held_peak = std::max(held_peak, n);
+			}
+			last = t;
+		}
+	});
 
 	long expected = 0;
 	alloc_count::Totals heap0;
@@ -687,7 +725,7 @@ int main(int argc, char** argv) {
 				held += p->kept_lines.exchange(0, std::memory_order_acquire);
 			}
 			expected += held;
-			held = cfg.backend == 'A' ? held : 0;
+			held = cfg.backend == 'B' ? 0 : held;
 		} else {
 			expected += static_cast<long>(per_round * P);
 		}
@@ -708,6 +746,8 @@ int main(int argc, char** argv) {
 	const alloc_count::Totals heap1 = alloc_count::totals();
 	const double cpu1 = thread_cpu_ns(sink.port.load(std::memory_order_acquire));
 	sink.measuring.store(false, std::memory_order_relaxed);
+	sampling.store(false, std::memory_order_relaxed);
+	sampler.join();
 	for (auto& t : ts) {
 		t.join();
 	}
@@ -732,10 +772,14 @@ int main(int argc, char** argv) {
 			}
 		}
 		std::printf("check backend=%c pattern=%d producers=%u lines=%llu written=%ld missing=%ld twice=%ld cleared_written=%ld"
-			" early=%ld bad_id=%ld other_thread=%ld order_inversions=%ld\n",
+			" early=%ld bad_id=%ld other_thread=%ld order_inversions=%ld due_inversions=%ld\n",
 			cfg.backend, cfg.pattern, P, static_cast<unsigned long long>(per_producer * P), sink.sunk.load(), missing, twice,
-			cleared_written, sink.early, sink.bad_id, sink.other_thread, sink.inversions);
+			cleared_written, sink.early, sink.bad_id, sink.other_thread, sink.inversions, sink.due_inversions);
 		ok = ok && missing == 0 && twice == 0 && cleared_written == 0 && sink.early == 0 && sink.bad_id == 0 && sink.other_thread == 0;
+		// (A) keeps per-thread order and due order; (C) must keep them too. (B) is reported, not gated.
+		if (cfg.backend != 'B') {
+			ok = ok && sink.inversions == 0 && sink.due_inversions == 0;
+		}
 		std::printf("check %s\n", ok ? "ok" : "FAILED");
 	}
 
@@ -750,20 +794,21 @@ int main(int argc, char** argv) {
 	const double calls = static_cast<double>(measured_calls);
 
 	const std::int64_t t_teardown = now_ns();
-	if (cfg.backend == 'A') {
+	if (cfg.backend == 'B') {
+		wlog->stop();
+	} else {
 		Logging::finish();
 		Logging::join();
-	} else {
-		wlog->stop();
 	}
 	const std::int64_t t_done = now_ns();
 	std::printf("{\"backend\":\"%c\",\"pattern\":%d,\"producers\":%u,\"formatted\":%s,\"check\":%s,\"rounds\":%d,"
 		"\"calls\":%.0f,\"median_ns\":%.3f,\"p99_ns\":%.3f,\"heap_bytes_per_call\":%.3f,\"allocs_per_call\":%.4f,"
 		"\"lag_p99_us\":%.1f,\"lag_median_us\":%.1f,\"lag_lines\":%zu,\"log_cpu_ns_per_call\":%.2f,"
+		"\"held_peak\":%ld,\"held_ms_per_call\":%.3f,"
 		"\"time_s\":{\"warmup\":%.3f,\"timed\":%.3f,\"teardown\":%.3f,\"total\":%.3f}}\n",
 		cfg.backend, cfg.pattern, P, cfg.formatted ? "true" : "false", cfg.check ? "true" : "false", cfg.rounds, calls, med, p99,
 		static_cast<double>(heap1.bytes - heap0.bytes) / calls, static_cast<double>(heap1.count - heap0.count) / calls,
-		lag_p99, lag_med, lags.size(), cpu0 < 0 || cpu1 < 0 ? -1.0 : (cpu1 - cpu0) / calls,
+		lag_p99, lag_med, lags.size(), cpu0 < 0 || cpu1 < 0 ? -1.0 : (cpu1 - cpu0) / calls, held_peak, held_ms / calls,
 		static_cast<double>(t_timed - t_start) / 1e9, static_cast<double>(t_end - t_timed) / 1e9,
 		static_cast<double>(t_done - t_teardown) / 1e9, static_cast<double>(t_done - t_start) / 1e9);
 	std::fflush(stdout);

@@ -25,7 +25,22 @@ replacement is proven better on every current use). The harness is `bench/wheel_
   `fetch_or` on the record's state by the worker, and the record stays filed until its deadline,
   when the fire discards it. No new wheel API.
 
-Both run the same workload in the same binary, one backend per process.
+- **(C) logger with a wheel inside its LOG thread**, the shape that would ship: logger exactly
+  as (A), its per-thread queues carrying every line to the LOG thread, except that the LOG thread
+  files deferred lines in a `wheel::timer_wheel` it owns (owner `arm`; no `arm_remote`, no inbox)
+  instead of its heap. Each pass's `expire(now)` hands back the due lines; the pass sorts that
+  batch by (due, call time, filing order) and merges it with the queues' lines as the heap's top
+  was merged, so due order and call order within a due time hold as in (A). The wheel's entry
+  lives in the `Logging` record (no pool), the record keeps itself alive while filed, a cleared
+  line stays filed and is dropped when its slot comes due (the cancel flag the fire checks, as
+  the heap drops a cancelled top), and the wait is until `next()`. It is
+  `bench/wheel_ab/c/logger.{h,cc}`, a copy of the library with only that change, built into
+  `logger_wheel_ab_c`; the library is unchanged. (C) is an arm added after the rule was committed;
+  it runs under the same rule, with C in B's place, on patterns 2 and 3. In pattern 1 no line
+  touches a timer in (C), so (C) is (A) there and has no rows.
+
+(A) and (B) run in one binary, one backend per process; (C) runs the same harness against its
+copy of logger.
 
 ## Workload
 
@@ -63,6 +78,10 @@ Per run, over its measured rounds:
   deadline (its block's start plus its delay; an upper bound on the true lag by at most the
   block's 64 calls). Microseconds.
 - **LOG-thread CPU per call**: the LOG thread's user plus system time (`thread_info`) / calls.
+- **Lines held** (reported, added with (C)): every 1 ms a sampler reads the lines the scheduler
+  holds (filed, cleared or not, as `pending_count()` counts them); its peak, and its integral per
+  call in milliseconds, how long a call's line stays filed. For pattern 3 this is how long
+  cleared lines stay filed in the wheel against the heap.
 
 ## Rule
 
@@ -86,6 +105,9 @@ the A/A pair.
   every line exactly once, none before its deadline (the sink's reading against a clock read
   before the call), and no cleared line; (B)'s check also passes under ThreadSanitizer.
   Per-thread order of immediate lines is counted and reported for both backends.
+  Added with (C): due order of deferred lines is counted from a clock read before and after each
+  call (a line written after one whose due is surely later); (C)'s check also requires both
+  orders kept, as (A) keeps them.
 
 A rule changed after data is a Decisions row, and every row reruns under it.
 

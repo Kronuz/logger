@@ -7,6 +7,8 @@
 #   run.sh tsan                    (B)'s --check under ThreadSanitizer (its own build), P = 4 and 14
 #   run.sh smoke                   each backend and pattern once, small, its configuration asserted
 #   run.sh row PATTERN P [fmt]     one row: an A/A pair, then AB BA AB BA AB BA; the rule's verdict
+#   run.sh check-c | tsan-c        the same checks for arm (C), which must also keep (A)'s order
+#   run.sh row-c PATTERN P         one row of A against C (patterns 2 and 3; in pattern 1 C is A)
 set -eu
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 BUILD=${WAB_BUILD:-$ROOT/.scratch/wab}
@@ -17,7 +19,7 @@ build() {  # build DIR BUILD_TYPE [extra cmake args]
 	type=$2
 	shift 2
 	cmake -S "$ROOT" -B "$dir" -G Ninja -DCMAKE_BUILD_TYPE="$type" -DLOGGER_BUILD_WHEEL_AB=ON "$@" >/dev/null
-	cmake --build "$dir" --target logger_wheel_ab >/dev/null
+	cmake --build "$dir" --target logger_wheel_ab logger_wheel_ab_c >/dev/null
 }
 
 describe() {  # what is timed: commit, host, toolchain, binary
@@ -70,6 +72,47 @@ smoke)
 		done
 	done
 	python3 -I "$HERE/summarize.py" --smoke "$out"
+	;;
+check-c)
+	build "$BUILD" Release
+	describe "$BUILD/logger_wheel_ab_c"
+	fail=0
+	for pattern in 1 2 3; do
+		for p in 1 4 14; do
+			"$BUILD/logger_wheel_ab_c" --backend C --pattern $pattern --producers $p --check | grep '^check' || fail=1
+		done
+	done
+	exit $fail
+	;;
+tsan-c)
+	dir=$BUILD-tsan
+	build "$dir" RelWithDebInfo -DCMAKE_CXX_FLAGS=-fsanitize=thread -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread
+	describe "$dir/logger_wheel_ab_c"
+	fail=0
+	for pattern in 1 2 3; do
+		for p in 4 14; do
+			TSAN_OPTIONS=halt_on_error=1:abort_on_error=0:exitcode=66 \
+				"$dir/logger_wheel_ab_c" --backend C --pattern $pattern --producers $p --check --rounds 1 --bursts 4 \
+				| grep '^check' || fail=1
+		done
+	done
+	exit $fail
+	;;
+row-c)
+	pattern=${2:?pattern}
+	p=${3:?producers}
+	build "$BUILD" Release
+	describe "$BUILD/logger_wheel_ab"
+	describe "$BUILD/logger_wheel_ab_c"
+	out=$(mktemp "$BUILD/row-c.XXXXXX")
+	for backend in A A A C C A A C C A A C C A; do
+		bin=$BUILD/logger_wheel_ab
+		if [ $backend = C ]; then
+			bin=$BUILD/logger_wheel_ab_c
+		fi
+		"$bin" --backend $backend --pattern "$pattern" --producers "$p" | tee -a "$out"
+	done
+	python3 -I "$HERE/summarize.py" "$out"
 	;;
 row)
 	pattern=${2:?pattern}

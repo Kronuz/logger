@@ -1,7 +1,7 @@
-"""The rule of docs/perf/wheel-ab.md over one row's runs (run.sh row), or a smoke's checks.
+"""The rule of docs/perf/wheel-ab.md over one row's runs (run.sh row, row-c), or a smoke's checks.
 
-A row's runs are, in order, the A/A pair and then six pairs AB BA AB BA AB BA; pair i gives
-r_i = B_i / A_i, r is their median, and the A/A band is |A'/A'' - 1|.
+A row's runs are, in order, the A/A pair and then six pairs AX XA AX XA AX XA, X being B or C;
+pair i gives r_i = X_i / A_i, r is their median, and the A/A band is |A'/A'' - 1|.
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ METRICS = (
     "allocs_per_call",
     "lag_p99_us",
     "log_cpu_ns_per_call",
+    "held_peak",
+    "held_ms_per_call",
 )
 
 
@@ -45,7 +47,8 @@ def smoke(rs: list[dict[str, Any]]) -> int:
 
 
 def row(rs: list[dict[str, Any]]) -> int:
-    order = "AAABBAABBAABBA"
+    other = rs[3]["backend"] if len(rs) > 3 else "B"
+    order = "AAA" + other * 2 + "AA" + other * 2 + "AA" + other * 2 + "A"
     if "".join(r["backend"] for r in rs) != order:
         print(f"FAIL: runs {''.join(r['backend'] for r in rs)}, expected {order}")
         return 1
@@ -58,15 +61,15 @@ def row(rs: list[dict[str, Any]]) -> int:
         name += ", formatted"
     print(f"row {name}")
     print(
-        f"{'metric':<22}{'A median':>12}{'B median':>12}{'r = B/A':>10}{'A/A w':>9}  ratios"
+        f"{'metric':<22}{'A median':>12}{other + ' median':>12}{'r = ' + other + '/A':>10}{'A/A w':>9}  ratios"
     )
     res: dict[str, tuple[float, float, float, float]] = {}
     for m in METRICS:
-        a = statistics.median(p[0][m] for p in pairs)
-        b = statistics.median(p[1][m] for p in pairs)
-        rv = [ratio(p[1][m], p[0][m]) for p in pairs]
+        a = statistics.median(p[0].get(m, 0.0) for p in pairs)
+        b = statistics.median(p[1].get(m, 0.0) for p in pairs)
+        rv = [ratio(p[1].get(m, 0.0), p[0].get(m, 0.0)) for p in pairs]
         r = statistics.median(rv)
-        w = abs(ratio(aa[1][m], aa[0][m]) - 1)
+        w = abs(ratio(aa[1].get(m, 0.0), aa[0].get(m, 0.0)) - 1)
         res[m] = (a, b, r, w)
         shown = " ".join(f"{x:.3f}" for x in rv)
         print(f"{m:<22}{a:>12.3f}{b:>12.3f}{r:>10.3f}{w:>9.3f}  {shown}")
@@ -86,12 +89,14 @@ def row(rs: list[dict[str, Any]]) -> int:
         verdict = "no win"
     print(
         f"verdict {name}: {verdict} (median r {r_med:.3f} vs {0.90 - w_med:.3f}: {median_ok}; "
-        f"p99 r {r_p99:.3f} vs {1.10 + w_p99:.3f}: {p99_ok}; heap B {heap_b:.1f} vs 1.10 x A {heap_a:.1f}: {heap_ok})"
+        f"p99 r {r_p99:.3f} vs {1.10 + w_p99:.3f}: {p99_ok}; heap {other} {heap_b:.1f} vs 1.10 x A {heap_a:.1f}: {heap_ok})"
     )
     for m in ("lag_p99_us", "log_cpu_ns_per_call"):
         _, _, r, w = res[m]
         if r > 1.10 + w:
-            print(f"note: B's {m} is {r:.2f}x A's, beyond the 1.10 + {w:.3f} band")
+            print(
+                f"note: {other}'s {m} is {r:.2f}x A's, beyond the 1.10 + {w:.3f} band"
+            )
     return 0
 
 
