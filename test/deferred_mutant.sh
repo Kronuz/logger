@@ -2,9 +2,11 @@
 # Mutants of the LOG thread's wheel that test/deferred.cc must kill: a deferred line filed 3 ms
 # early, and 3 ms late, and a batch that leaves lines tied on due and call time in any order. Each
 # builds a copy of the tree with logger.cc changed and runs logger_deferred_test (the ties mutant
-# with its `ties` argument); exits 0 only if the test fails on every mutant.
+# with its `ties` argument); exits 0 only if the test fails on every mutant. The late mutant is
+# killed by the lateness bound, so the test runs with DEFERRED_LATENESS=1.
 #   test/deferred_mutant.sh [BUILD_ROOT]     (default .scratch/mutant)
 set -eu
+export DEFERRED_LATENESS=1
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:-$ROOT/.scratch/mutant}
 
