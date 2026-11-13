@@ -118,7 +118,11 @@ calling thread) and gives the LOG thread up to `wait` passes, each waiting up to
 queued line is written, deferred lines due by then are written, and the rest are
 released. A producer that published just then sees the LOG thread closed and
 writes its line itself, unless the last look got it. At exit, if `finish()` was
-never called, a static's destructor does the same with one pass.
+never called, a static's destructor does the same with one pass and joins the LOG thread for
+200 ms. If the join times out (a handler is stalled), the handlers and config are about to be
+destroyed, so the destructor sets `abandoned`: the LOG thread finishes the line it is in, writes
+nothing more (what is queued is lost, as at any timed-out join) and parks, and the destructor waits
+for that before returning.
 
 ## Deferred lines ride the LOG thread's wheel
 

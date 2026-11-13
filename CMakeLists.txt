@@ -115,6 +115,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_test(NAME logger_queue COMMAND logger_queue_test)
   set_tests_properties(logger_queue PROPERTIES TIMEOUT 600)
 
+  # Exit without finish() while the LOG thread is stalled in a handler: the exit-time join times out
+  # and the statics are destroyed; the LOG thread must not touch them then.
+  add_executable(logger_exit_test test/exit.cc)
+  target_link_libraries(logger_exit_test PRIVATE logger)
+  add_test(NAME logger_exit COMMAND logger_exit_test)
+
   # One scripted run must write the golden bytes (test/transcript.golden), which the implementation
   # before the producer path changed wrote: the path may change, never what is written.
   add_executable(logger_transcript test/transcript.cc)

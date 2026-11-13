@@ -904,6 +904,8 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	std::condition_variable cv;
 	std::atomic<int> ending{-1};             // finish()'s countdown of passes; -1 until it begins
 	std::atomic<bool> final_done{false};     // the last look at the queues is over
+	std::atomic<bool> abandoned{false};      // the exit-time join timed out: write nothing more
+	std::atomic<bool> parked{false};         // the LOG thread has seen `abandoned` and writes nothing
 	// LOG thread only: deferred lines filed in a wheel by due time; a pass takes the due ones into
 	// `batch`, sorted by (due, call time, filing order), and merges it with the queues' lines.
 	std::unique_ptr<wheel::timer_wheel> wheel_ = std::make_unique<wheel::timer_wheel>(
@@ -1063,6 +1065,9 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 		}
 		std::make_heap(heads.begin(), heads.end(), later);
 		for (;;) {
+			if (abandoned.load(std::memory_order_acquire)) {
+				return false;
+			}
 			purge();
 			const bool ring = !heads.empty();
 			const bool heap = batch_at < batch.size();
@@ -1146,6 +1151,10 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	// rest are released.
 	void close() {
 		worker_state.fetch_or(kClosed, std::memory_order_seq_cst);
+		if (abandoned.load(std::memory_order_acquire)) {
+			final_done.store(true, std::memory_order_release);
+			return;   // what is queued is not written, and nothing is released that could log
+		}
 		const auto now = steady_ns(std::chrono::steady_clock::now());
 		constexpr auto all = std::numeric_limits<std::int64_t>::max();
 		while (pass(all, all, now)) {   // every queued line, and the deferred lines due by now
@@ -1169,11 +1178,26 @@ public:
 		static struct Finisher {
 			~Finisher() {
 				worker->end(1);
-				worker->join(200ms);
+				if (!worker->join(200ms)) {
+					worker->abandon();
+				}
 			}
 		} finisher;
 		(void)finisher;
 		return *worker;
+	}
+
+	// The exit-time join timed out: the statics (handlers, config) are about to be destroyed, so the
+	// LOG thread writes nothing more. It finishes the line it is in, then parks.
+	void abandon() noexcept {
+		abandoned.store(true, std::memory_order_release);
+		{
+			std::lock_guard<std::mutex> lk(mtx);
+			cv.notify_all();
+		}
+		while (!parked.load(std::memory_order_acquire)) {
+			std::this_thread::yield();
+		}
 	}
 
 	const std::string& name() const noexcept {
@@ -1269,6 +1293,9 @@ public:
 	void operator()() {
 		using namespace std::chrono;
 		for (;;) {
+			if (abandoned.load(std::memory_order_acquire)) {
+				break;
+			}
 			if ((worker_state.load(std::memory_order_relaxed) & kStopping) != 0) {
 				// finish(): each pass writes what is due, then waits up to 100 ms for what comes due next;
 				// the loop ends when nothing is left or the countdown runs out.
@@ -1285,7 +1312,7 @@ public:
 				}
 				const auto until = std::min(next_due, steady_ns(steady_clock::now() + 100ms));
 				std::unique_lock<std::mutex> lk(mtx);
-				cv.wait_until(lk, steady_clock::time_point(nanoseconds(until)), [&] { return ending.load() == 0; });
+				cv.wait_until(lk, steady_clock::time_point(nanoseconds(until)), [&] { return ending.load() == 0 || abandoned.load(std::memory_order_acquire); });
 				continue;
 			}
 			const auto t = steady_ns(steady_clock::now());
@@ -1318,6 +1345,7 @@ public:
 			worker_state.fetch_and(~kSleeping, std::memory_order_seq_cst);
 		}
 		close();
+		parked.store(true, std::memory_order_release);
 	}
 };
 

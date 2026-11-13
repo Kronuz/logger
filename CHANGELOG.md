@@ -7,6 +7,12 @@ Upgrading a pin from before 2026-10-30: [the consumer upgrade note](https://gith
 
 ## 2026-11-12 (the scheduler link, and review follow-ups)
 
+### Fixed
+
+- A process that returns from main without `finish()` while a handler is stalled no longer crashes:
+  when the exit-time 200 ms join times out, the LOG thread stops writing (after the line it is in)
+  before the handlers and config are destroyed. `test/exit.cc` forces the timeout.
+
 ### Changed
 
 - logger no longer links [Kronuz/scheduler](https://github.com/Kronuz/scheduler); CMake fetches
