@@ -230,7 +230,9 @@ int main() {
 		for (int k = 0; k < 400; ++k) {
 			int a = static_cast<int>(rng());
 			double d = static_cast<double>(static_cast<long long>(rng())) / 977.0;
-			std::string s(rng() % 60, 'a' + static_cast<char>(rng() % 26));
+			const std::size_t len = rng() % 60;   // drawn in this order, not as unsequenced arguments
+			const char ch = 'a' + static_cast<char>(rng() % 26);
+			const std::string s(len, ch);
 			switch (rng() % 4) {
 				case 0: L_INFO("r{} {} {}", k, a, s); break;
 				case 1: L_NOTICE("r{} {:.4f} {:>10}", k, d, s); break;

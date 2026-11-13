@@ -10,9 +10,10 @@
 // due_i <= due_j, i is written before j. Due is the `wakeup` handed to do_log.
 //
 // The wake allowance is measured here, not assumed: the median and p99 of how late a timed
-// condition-variable wait returns on this machine now. The lateness bounds are skipped under
-// ThreadSanitizer, which slows every thread, and when DEFERRED_LOADED is set (test/deferred_load.sh
-// competes with busy loops); the other checks hold there too.
+// condition-variable wait returns on this machine now. The lateness is always reported; the bounds
+// are asserted only when DEFERRED_LATENESS=1 is set (test/deferred_lateness.sh, on a quiet machine)
+// and not under ThreadSanitizer. A shared CI runner has no timing bound, so the ordering, once-only
+// and never-early checks are the pass/fail path there and under load.
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -231,7 +232,7 @@ static void single(Capture* c) {
 	const auto med = late[late.size() / 2], p99 = late[late.size() * 99 / 100], max = late.back();
 	std::printf("lateness: min %.3f ms, median %.3f ms, p99 %.3f ms, max %.3f ms\n", late.front() / 1e6,
 		med / 1e6, p99 / 1e6, max / 1e6);
-	if (!DEFERRED_TSAN && std::getenv("DEFERRED_LOADED") == nullptr) {
+	if (!DEFERRED_TSAN && std::getenv("DEFERRED_LATENESS") != nullptr) {
 		// A line waits for the end of its 1 ms slot, then for the LOG thread's timed wake.
 		CHECK(med <= kTickNs + wake_med + 500'000);
 		CHECK(p99 <= kTickNs + wake_p99 + 2'000'000);

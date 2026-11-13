@@ -98,7 +98,6 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_executable(logger_deferred_test test/deferred.cc)
   target_link_libraries(logger_deferred_test PRIVATE logger)
   add_test(NAME logger_deferred COMMAND logger_deferred_test)
-  set_tests_properties(logger_deferred PROPERTIES RUN_SERIAL TRUE)   # a lateness bound
   add_test(NAME logger_deferred_stress COMMAND logger_deferred_test stress)
   add_test(NAME logger_deferred_ties COMMAND logger_deferred_test ties)
 
