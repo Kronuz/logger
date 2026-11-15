@@ -179,6 +179,8 @@ cmake --build build --target logger_bench logger_latency
 
 ## 📚 Documentation
 
+- [The Line You Usually Cancel](https://kronuz.github.io/blog/logger/):
+  the Familiars post on why it exists and how it works.
 - [docs/API.md](docs/API.md): `LogConfig`, `LogHooks`, sinks, the macros, and the
   `Log` handle.
 - [ARCHITECTURE.md](ARCHITECTURE.md): the three paths a line takes, how cancel
