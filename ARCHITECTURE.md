@@ -161,7 +161,7 @@ insert:
 2. A producer whose line is due within 8 ms of the LOG thread's wake wakes it, because a timed
    wait returns late and a line due just after it would otherwise be filed already due.
 
-The LOG thread is a `Thread` from [Kronuz/threadpool](https://github.com/Kronuz/threadpool),
+The LOG thread is a `Thread` from [Kronuz/workpool](https://github.com/Kronuz/workpool),
 which the CMake file fetches at its own pin.
 
 ## The sinks

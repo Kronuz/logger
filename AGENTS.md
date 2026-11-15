@@ -42,7 +42,7 @@ ARCHITECTURE.md; for usage see README.md and docs/API.md; for open design work s
   (each piece of a call alone), `bench/steady.cc` (a profiling loop), `bench/drain.cc` (the LOG
   thread's drain over time), `bench/latency.cc` (an isolated line from the call to its handler).
   Built with `-DLOGGER_BUILD_BENCH=ON`.
-- `CMakeLists.txt` — FetchContents `threadpool`, `wheel`, `term-color` and `cppcodec`, builds the static library, and
+- `CMakeLists.txt` — FetchContents `workpool`, `wheel`, `term-color` and `cppcodec`, builds the static library, and
   wires the test and demo when this repo is the top-level project.
 
 ## Build & run
@@ -70,7 +70,7 @@ cmake --build build-tsan && ./build-tsan/logger_test
 - C++20. Double quotes in code. No em dashes in docs.
 - MIT-licensed; keep the copyright header (Copyright (c) 2015-2019 Dubalu LLC) on
   source files.
-- The core depends on `Kronuz/threadpool`, `Kronuz/wheel` and `Kronuz/term-color` (the palette plus
+- The core depends on `Kronuz/workpool`, `Kronuz/wheel` and `Kronuz/term-color` (the palette plus
   the `collapse`/`apply` resolution the sink runs per line), plus `cppcodec`
   (header-only) used only in `logger.cc` to base64-encode the iTerm2 badge text.
   Everything *host-specific* (exception description, real backtraces, thread names,

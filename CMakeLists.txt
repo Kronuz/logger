@@ -12,15 +12,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(wheel)
 
-# threadpool: its Thread runs the LOG thread (the richer host-specific bits -- exception describe,
+# workpool: its Thread runs the LOG thread (the richer host-specific bits -- exception describe,
 # real backtraces, named threads -- come in through hooks with std defaults, so a consumer
 # re-injects them via an adapter).
 FetchContent_Declare(
-  threadpool
-  GIT_REPOSITORY https://github.com/Kronuz/threadpool.git
-  GIT_TAG        63e03a5deca9c91f08755d900c61885dd5e75822
+  workpool
+  GIT_REPOSITORY https://github.com/Kronuz/workpool.git
+  GIT_TAG        640c66bfebccae811377670a265b62f4878ede8a
 )
-FetchContent_MakeAvailable(threadpool)
+FetchContent_MakeAvailable(workpool)
 
 # term-color: the compile-time stacked color palette (rgb()/CLEAR_COLOR) plus the
 # runtime resolution layer (collapse / detect_depth / apply). The logger uses it for
@@ -50,7 +50,7 @@ add_library(logger STATIC logger.cc)
 target_include_directories(logger PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(logger PRIVATE "${cppcodec_SOURCE_DIR}")
 target_compile_features(logger PUBLIC cxx_std_20)
-target_link_libraries(logger PUBLIC threadpool::threadpool term_color::term_color wheel::wheel)
+target_link_libraries(logger PUBLIC workpool::workpool term_color::term_color wheel::wheel)
 add_library(logger::logger ALIAS logger)
 
 # Build the smoke test only when this repo is the top-level project, so
