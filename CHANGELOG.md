@@ -5,6 +5,18 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Upgrading a pin from before 2026-10-30: [the consumer upgrade note](https://github.com/Kronuz/cpp-libraries/blob/main/docs/UPGRADING-2026-10.md#logger) lists what changes for callers, how to find affected inputs, the commits not to pin, and the speedup.
 
+## 2026-11-16 (a producer's burst cost)
+
+### Fixed
+
+- A burst of routine lines no longer wakes the LOG thread once a line. The 8 ms wake slack that
+  files a deferred line in the wheel before it is due also applied to routine lines, which are due
+  a tick after their call and so always fell inside it: each line woke the LOG thread again, and
+  the producer paid a notify per line. The slack now applies to deferred lines only, and a routine
+  line wakes the LOG thread only when it is due before the thread's wake, as before `a07f3fe`.
+  RESULT. `test/wake.cc` counts the context switches over a burst; `test/wake_mutant.sh`
+  restores the slack for routine lines and requires that test to fail.
+
 ## 2026-11-12 (the scheduler link, and review follow-ups)
 
 ### Fixed

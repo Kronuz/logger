@@ -158,8 +158,11 @@ Two rules keep the LOG thread filing lines before they are due, so the batch rar
 insert:
 
 1. After a pass that filed lines, it sleeps at most one tick: more are likely in the queues.
-2. A producer whose line is due within 8 ms of the LOG thread's wake wakes it, because a timed
-   wait returns late and a line due just after it would otherwise be filed already due.
+2. A producer whose deferred line is due within 8 ms of the LOG thread's wake wakes it, because a
+   timed wait returns late and a line due just after it would otherwise be filed already due. A
+   queued line is written, not filed, so it keeps the rule above (due before `worker_wake`): a
+   burst of batched lines, each due a tick after its call, would otherwise wake the LOG thread
+   once a line and cost the producer a notify each (`docs/perf/burst-cost.md`).
 
 The LOG thread is a `Thread` from [Kronuz/workpool](https://github.com/Kronuz/workpool),
 which the CMake file fetches at its own pin.
