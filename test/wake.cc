@@ -1,7 +1,8 @@
 // How soon a routine line is written. With nothing pending, an isolated L_INFO is written at once: the
 // LOG thread is woken for it. While a line is pending (here a held watchdog), a routine line joins the
 // 1 ms batch: it is due 1 ms after the call and needs no signal, so a burst of such lines costs its
-// producer no notify of the LOG thread (test/wake_mutant.sh: a burst that notifies it once a line).
+// producer no notify of the LOG thread; so does a burst of queue-order task records (an L_DELAYED
+// due within a tick). test/wake_mutant.sh: bursts that notify it once a line.
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -48,12 +49,17 @@ static std::chrono::nanoseconds median_latency(int n) {
 	return std::chrono::nanoseconds(v[v.size() / 2]);
 }
 
-// The notifies of the LOG thread that `n` L_INFO calls `gap` apart cost their producer.
-static long burst_notifies(int n, std::chrono::nanoseconds gap) {
+// The notifies of the LOG thread that `n` calls `gap` apart cost their producer: L_INFO lines, or
+// with `delay` set, queue-order task records (L_DELAYED(false, delay): due within a tick).
+static long burst_notifies(int n, std::chrono::nanoseconds gap, std::chrono::microseconds delay = 0us) {
 	std::this_thread::sleep_for(5ms);   // the LOG thread settles into its sleep
 	const long before = logger_detail::worker_notifies.load();
 	for (int i = 0; i < n; ++i) {
-		L_INFO("burst {}", i);
+		if (delay == 0us) {
+			L_INFO("burst {}", i);
+		} else {
+			(void)L_DELAYED(false, delay, LOG_INFO, "burst {}", i);
+		}
 		for (const auto t = clk::now(); clk::now() - t < gap;) {
 		}
 	}
@@ -82,6 +88,11 @@ int main() {
 		const auto notifies = burst_notifies(1000, 10us);
 		std::printf("1000 batched lines 10 us apart: %ld notifies\n", notifies);
 		CHECK(notifies < 50);
+
+		// The same for queue-order task records, due 500 us after the call.
+		const auto task_notifies = burst_notifies(1000, 10us, 500us);
+		std::printf("1000 queue-order task lines 10 us apart: %ld notifies\n", task_notifies);
+		CHECK(task_notifies < 50);
 	}   // the watchdog is cancelled: never written
 
 	Logging::finish();

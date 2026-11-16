@@ -1,7 +1,7 @@
 #!/bin/sh
-# The mutant test/wake.cc must kill: a routine line wakes the LOG thread when it is due within the
-# deferred lines' slack (kWakeSlackNs) of the thread's wake, so a burst of batched lines wakes it
-# once a line. Builds a copy of the tree with logger.cc changed and runs logger_wake_test; exits 0
+# The mutants test/wake.cc must kill: a routine line (wake-slack), or a queue-order task record
+# (wake-slack-task), wakes the LOG thread when it is due within the deferred lines' slack
+# (kWakeSlackNs) of the thread's wake, so a burst of them wakes it once a line. Builds a copy of the tree with logger.cc changed and runs logger_wake_test; exits 0
 # only if the test fails on it. Prints the switch counts, the fixed tree's first with `both`.
 #   test/wake_mutant.sh [BUILD_ROOT] [both]     (default .scratch/mutant)
 set -eu
@@ -34,3 +34,9 @@ if "$OUT/wake-slack/build/logger_wake_test"; then
 	exit 1
 fi
 echo "mutant wake-slack: killed"
+build wake-slack-task 'wake_for(ordered ? due : due - kWakeSlackNs);' 'wake_for(due - kWakeSlackNs);'
+if "$OUT/wake-slack-task/build/logger_wake_test"; then
+	echo "mutant wake-slack-task: survived"
+	exit 1
+fi
+echo "mutant wake-slack-task: killed"

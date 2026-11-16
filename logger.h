@@ -225,7 +225,7 @@ inline thread_local ThreadState thread_state{};
 inline constexpr unsigned kSleeping = 1, kStopping = 2, kClosed = 4;
 alignas(kCacheLine) inline std::atomic<unsigned> worker_state{0};
 alignas(kCacheLine) inline std::atomic<std::int64_t> worker_wake{0};
-inline std::atomic<long> worker_notifies{0};   // producers' notifies of the sleeping LOG thread (test/wake.cc)
+alignas(kCacheLine) inline std::atomic<long> worker_notifies{0};   // producers' notifies of the sleeping LOG thread (test/wake.cc)
 
 // A record in a thread's queue: a header, then the message (a line) or a reference to a `Logging`
 // record (a task: any line the macros' fast path does not take, kept by the full record). Every record
