@@ -757,7 +757,9 @@ static std::int64_t steady_ns(std::chrono::steady_clock::time_point t) noexcept 
 }
 
 constexpr std::int64_t kTickNs = 1'000'000;   // the batching tick, kCoalesce
-constexpr std::int64_t kWakeSlackNs = 8 * kTickNs;   // a push due within this of the sleep's end wakes the LOG thread
+// A deferred line due within this of the LOG thread's wake wakes it now: a timed wait wakes late, and
+// the line would be filed already due. Queue-order lines need no slack: they are written, not filed.
+constexpr std::int64_t kWakeSlackNs = 8 * kTickNs;
 
 // A queued line's due time and call time, in steady_clock nanoseconds.
 static void line_key(const LineRecord* l, std::int64_t& due, std::int64_t& created) noexcept {
@@ -1213,10 +1215,10 @@ public:
 		cv.notify_all();
 	}
 
-	// Wakes the LOG thread if it sleeps past `due` (steady_clock nanoseconds).
-	void wake_for(std::int64_t due) noexcept {
-		// Slack: a timed wait wakes late, and a line due just after the wake would be filed already due.
-		if (due - kWakeSlackNs < worker_wake.load(std::memory_order_relaxed)
+	// Wakes the LOG thread if it sleeps past `by` (steady_clock nanoseconds): a line's due time, or a
+	// deferred line's less kWakeSlackNs.
+	void wake_for(std::int64_t by) noexcept {
+		if (by < worker_wake.load(std::memory_order_relaxed)
 				&& (worker_state.fetch_and(~kSleeping, std::memory_order_seq_cst) & kSleeping) != 0) {
 			std::lock_guard<std::mutex> lk(mtx);
 			cv.notify_one();
@@ -1284,7 +1286,7 @@ public:
 			return false;
 		}
 		if ((st & kSleeping) != 0) {
-			get().wake_for(due);
+			get().wake_for(ordered ? due : due - kWakeSlackNs);
 		}
 		return true;
 	}

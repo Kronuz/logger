@@ -1,6 +1,7 @@
 // How soon a routine line is written. With nothing pending, an isolated L_INFO is written at once: the
 // LOG thread is woken for it. While a line is pending (here a held watchdog), a routine line joins the
-// 1 ms batch: it is due 1 ms after the call and needs no signal.
+// 1 ms batch: it is due 1 ms after the call and needs no signal, so a burst of such lines wakes the
+// LOG thread about once a tick (test/wake_mutant.sh: a burst that wakes it once a line).
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -9,6 +10,8 @@
 #include <memory>
 #include <thread>
 #include <vector>
+
+#include <sys/resource.h>   // getrusage
 
 #include "logger.h"
 
@@ -47,6 +50,22 @@ static std::chrono::nanoseconds median_latency(int n) {
 	return std::chrono::nanoseconds(v[v.size() / 2]);
 }
 
+// The process's voluntary context switches over `n` L_INFO calls `gap` apart (the caller spins between
+// them): each wake of the LOG thread costs at least one.
+static long burst_switches(int n, std::chrono::nanoseconds gap) {
+	std::this_thread::sleep_for(5ms);   // the LOG thread settles into its sleep
+	rusage before{};
+	getrusage(RUSAGE_SELF, &before);
+	for (int i = 0; i < n; ++i) {
+		L_INFO("burst {}", i);
+		for (const auto t = clk::now(); clk::now() - t < gap;) {
+		}
+	}
+	rusage after{};
+	getrusage(RUSAGE_SELF, &after);
+	return after.ru_nvcsw - before.ru_nvcsw;
+}
+
 int main() {
 	Logging::handlers.clear();
 	Logging::add_handler(std::make_unique<Stamp>());
@@ -64,6 +83,11 @@ int main() {
 		const auto batched = median_latency(15);
 		std::printf("isolated line, a line pending: median %.1f us\n", static_cast<double>(batched.count()) / 1e3);
 		CHECK(batched >= 900us);
+
+		// A burst of batched lines wakes the LOG thread about once a tick, not once a line.
+		const auto woken = burst_switches(400, 10us);
+		std::printf("400 batched lines 10 us apart: %ld voluntary context switches\n", woken);
+		CHECK(woken < 100);
 	}   // the watchdog is cancelled: never written
 
 	Logging::finish();
