@@ -11,7 +11,11 @@
 #include <thread>
 #include <vector>
 
-#include <sys/resource.h>   // getrusage
+#if defined(__APPLE__)
+#include <mach/mach.h>       // task_info(TASK_EVENTS_INFO): the task's context switches
+#else
+#include <sys/resource.h>    // getrusage
+#endif
 
 #include "logger.h"
 
@@ -50,20 +54,31 @@ static std::chrono::nanoseconds median_latency(int n) {
 	return std::chrono::nanoseconds(v[v.size() / 2]);
 }
 
-// The process's voluntary context switches over `n` L_INFO calls `gap` apart (the caller spins between
-// them): each wake of the LOG thread costs at least one.
+// The process's context switches so far (macOS leaves getrusage's counts at zero).
+static long switches() {
+#if defined(__APPLE__)
+	task_events_info_data_t info{};
+	mach_msg_type_number_t count = TASK_EVENTS_INFO_COUNT;
+	CHECK(task_info(mach_task_self(), TASK_EVENTS_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS);
+	return info.csw;
+#else
+	rusage u{};
+	getrusage(RUSAGE_SELF, &u);
+	return u.ru_nvcsw;
+#endif
+}
+
+// The context switches over `n` L_INFO calls `gap` apart (the caller spins between them): each wake
+// of the LOG thread costs at least one.
 static long burst_switches(int n, std::chrono::nanoseconds gap) {
 	std::this_thread::sleep_for(5ms);   // the LOG thread settles into its sleep
-	rusage before{};
-	getrusage(RUSAGE_SELF, &before);
+	const long before = switches();
 	for (int i = 0; i < n; ++i) {
 		L_INFO("burst {}", i);
 		for (const auto t = clk::now(); clk::now() - t < gap;) {
 		}
 	}
-	rusage after{};
-	getrusage(RUSAGE_SELF, &after);
-	return after.ru_nvcsw - before.ru_nvcsw;
+	return switches() - before;
 }
 
 int main() {
@@ -86,7 +101,7 @@ int main() {
 
 		// A burst of batched lines wakes the LOG thread about once a tick, not once a line.
 		const auto woken = burst_switches(400, 10us);
-		std::printf("400 batched lines 10 us apart: %ld voluntary context switches\n", woken);
+		std::printf("400 batched lines 10 us apart: %ld context switches\n", woken);
 		CHECK(woken < 100);
 	}   // the watchdog is cancelled: never written
 
