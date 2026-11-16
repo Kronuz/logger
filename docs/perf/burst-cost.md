@@ -53,8 +53,9 @@ written, not filed, so it needs no slack. The deferred lines' wheel, their filin
 lateness are unchanged.
 
 `test/wake.cc` counts the producers' notifies of the LOG thread (`logger_detail::worker_notifies`)
-over 1,000 batched lines 10 us apart and requires fewer than 50; `test/wake_mutant.sh` restores
-the slack for routine lines and requires the test to fail.
+over 1,000 batched lines and over 1,000 queue-order task records (`L_DELAYED(false, 500us)`), 10 us
+apart, and requires fewer than 50 each; `test/wake_mutant.sh` restores the slack for routine lines
+and for queue-order records, and requires the test to fail on each.
 
 The confirming 30-round A/B against f61d8df and its A/A are in the campaign journal
 (logger-burst-cost).
