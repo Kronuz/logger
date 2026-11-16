@@ -1220,6 +1220,7 @@ public:
 	void wake_for(std::int64_t by) noexcept {
 		if (by < worker_wake.load(std::memory_order_relaxed)
 				&& (worker_state.fetch_and(~kSleeping, std::memory_order_seq_cst) & kSleeping) != 0) {
+			worker_notifies.fetch_add(1, std::memory_order_relaxed);
 			std::lock_guard<std::mutex> lk(mtx);
 			cv.notify_one();
 		}

@@ -15,8 +15,8 @@ Upgrading a pin from before 2026-10-30: [the consumer upgrade note](https://gith
   the producer paid a notify per line. The slack now applies to deferred lines only, and a routine
   line wakes the LOG thread only when it is due before the thread's wake, as before `a07f3fe`.
   Against f61d8df the burst cost goes from 1.45 (1 producer) and 1.85 (4 producers) times back to
-  0.98 and 1.04 (`docs/perf/burst-cost.md`). `test/wake.cc` counts the waits and wakes over a
-  burst; `test/wake_mutant.sh` restores the slack for routine lines and requires that test to fail.
+  0.98 and 1.04 (`docs/perf/burst-cost.md`). `test/wake.cc` counts the producer's notifies over
+  a burst; `test/wake_mutant.sh` restores the slack for routine lines and requires that test to fail.
 
 ## 2026-11-12 (the scheduler link, and review follow-ups)
 

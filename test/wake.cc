@@ -1,7 +1,7 @@
 // How soon a routine line is written. With nothing pending, an isolated L_INFO is written at once: the
 // LOG thread is woken for it. While a line is pending (here a held watchdog), a routine line joins the
-// 1 ms batch: it is due 1 ms after the call and needs no signal, so a burst of such lines wakes the
-// LOG thread about once a tick (test/wake_mutant.sh: a burst that wakes it once a line).
+// 1 ms batch: it is due 1 ms after the call and needs no signal, so a burst of such lines costs its
+// producer no notify of the LOG thread (test/wake_mutant.sh: a burst that notifies it once a line).
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -10,12 +10,6 @@
 #include <memory>
 #include <thread>
 #include <vector>
-
-#if defined(__APPLE__)
-#include <mach/mach.h>       // task_info(TASK_EVENTS_INFO): the task's context switches
-#else
-#include <sys/resource.h>    // getrusage
-#endif
 
 #include "logger.h"
 
@@ -54,33 +48,16 @@ static std::chrono::nanoseconds median_latency(int n) {
 	return std::chrono::nanoseconds(v[v.size() / 2]);
 }
 
-// The process's waits and wakes so far: on macOS its BSD system calls (a wait or a notify is one;
-// getrusage's switch counts stay zero there), elsewhere its voluntary context switches. Neither
-// counts a preemption, so a loaded machine does not inflate them.
-static long switches() {
-#if defined(__APPLE__)
-	task_events_info_data_t info{};
-	mach_msg_type_number_t count = TASK_EVENTS_INFO_COUNT;
-	CHECK(task_info(mach_task_self(), TASK_EVENTS_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS);
-	return info.syscalls_unix;
-#else
-	rusage u{};
-	getrusage(RUSAGE_SELF, &u);
-	return u.ru_nvcsw;
-#endif
-}
-
-// switches() over `n` L_INFO calls `gap` apart (the caller spins between them, with no system call):
-// each wake of the LOG thread costs at least one.
-static long burst_switches(int n, std::chrono::nanoseconds gap) {
+// The notifies of the LOG thread that `n` L_INFO calls `gap` apart cost their producer.
+static long burst_notifies(int n, std::chrono::nanoseconds gap) {
 	std::this_thread::sleep_for(5ms);   // the LOG thread settles into its sleep
-	const long before = switches();
+	const long before = logger_detail::worker_notifies.load();
 	for (int i = 0; i < n; ++i) {
 		L_INFO("burst {}", i);
 		for (const auto t = clk::now(); clk::now() - t < gap;) {
 		}
 	}
-	return switches() - before;
+	return logger_detail::worker_notifies.load() - before;
 }
 
 int main() {
@@ -101,10 +78,10 @@ int main() {
 		std::printf("isolated line, a line pending: median %.1f us\n", static_cast<double>(batched.count()) / 1e3);
 		CHECK(batched >= 900us);
 
-		// A burst of batched lines wakes the LOG thread about once a tick, not once a line.
-		const auto woken = burst_switches(1000, 10us);
-		std::printf("1000 batched lines 10 us apart: %ld waits and wakes\n", woken);
-		CHECK(woken < 250);
+		// A burst of batched lines: the first notifies the LOG thread, the rest are due after its wake.
+		const auto notifies = burst_notifies(1000, 10us);
+		std::printf("1000 batched lines 10 us apart: %ld notifies\n", notifies);
+		CHECK(notifies < 50);
 	}   // the watchdog is cancelled: never written
 
 	Logging::finish();

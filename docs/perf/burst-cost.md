@@ -52,9 +52,9 @@ records wake the LOG thread only when due before its wake, as at f61d8df. A queu
 written, not filed, so it needs no slack. The deferred lines' wheel, their filing rules and their
 lateness are unchanged.
 
-`test/wake.cc` counts the process's waits and wakes over 1,000 batched lines 10 us apart (BSD
-system calls on macOS, voluntary context switches elsewhere); `test/wake_mutant.sh` restores the
-slack for routine lines and requires the test to fail.
+`test/wake.cc` counts the producers' notifies of the LOG thread (`logger_detail::worker_notifies`)
+over 1,000 batched lines 10 us apart and requires fewer than 50; `test/wake_mutant.sh` restores
+the slack for routine lines and requires the test to fail.
 
 The confirming 30-round A/B against f61d8df and its A/A are in the campaign journal
 (logger-burst-cost).
