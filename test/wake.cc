@@ -54,13 +54,15 @@ static std::chrono::nanoseconds median_latency(int n) {
 	return std::chrono::nanoseconds(v[v.size() / 2]);
 }
 
-// The process's context switches so far (macOS leaves getrusage's counts at zero).
+// The process's waits and wakes so far: on macOS its BSD system calls (a wait or a notify is one;
+// getrusage's switch counts stay zero there), elsewhere its voluntary context switches. Neither
+// counts a preemption, so a loaded machine does not inflate them.
 static long switches() {
 #if defined(__APPLE__)
 	task_events_info_data_t info{};
 	mach_msg_type_number_t count = TASK_EVENTS_INFO_COUNT;
 	CHECK(task_info(mach_task_self(), TASK_EVENTS_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS);
-	return info.csw;
+	return info.syscalls_unix;
 #else
 	rusage u{};
 	getrusage(RUSAGE_SELF, &u);
@@ -68,8 +70,8 @@ static long switches() {
 #endif
 }
 
-// The context switches over `n` L_INFO calls `gap` apart (the caller spins between them): each wake
-// of the LOG thread costs at least one.
+// switches() over `n` L_INFO calls `gap` apart (the caller spins between them, with no system call):
+// each wake of the LOG thread costs at least one.
 static long burst_switches(int n, std::chrono::nanoseconds gap) {
 	std::this_thread::sleep_for(5ms);   // the LOG thread settles into its sleep
 	const long before = switches();
@@ -100,9 +102,9 @@ int main() {
 		CHECK(batched >= 900us);
 
 		// A burst of batched lines wakes the LOG thread about once a tick, not once a line.
-		const auto woken = burst_switches(400, 10us);
-		std::printf("400 batched lines 10 us apart: %ld context switches\n", woken);
-		CHECK(woken < 100);
+		const auto woken = burst_switches(1000, 10us);
+		std::printf("1000 batched lines 10 us apart: %ld waits and wakes\n", woken);
+		CHECK(woken < 250);
 	}   // the watchdog is cancelled: never written
 
 	Logging::finish();
