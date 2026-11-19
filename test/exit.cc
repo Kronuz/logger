@@ -1,11 +1,14 @@
 // Two children that return from main without finish(), each run three times; the parent expects
 // status 0.
 //
-// `child`: the LOG thread is stalled in a handler, so the exit-time join times out and the statics
-// (the handlers among them) are destroyed. The LOG thread must have stopped touching them by then.
-// Its handler is slow (20 ms a line) and counts its calls; its destructor sets a flag, and a call
-// after that exits with status 99. The test counts calls, never times them: the child is forced
-// into the timeout by 1200 lines at 20 ms each against the 200 ms join.
+// `child`: the LOG thread is stalled in a handler, so the exit-time stop gives up on it and the
+// statics (the handlers among them) are destroyed. The LOG thread must have stopped touching them by
+// then. Its handler stalls 1 s on its third line, against the stop's 200 ms without a written line,
+// and counts its calls; its destructor sets a flag, and a call after that exits with status 99.
+//
+// `child-slow`: the drain is slow but never stalled: 400 lines queued at exit, 1 ms each, take
+// longer than one 200 ms join. Every line is written (status 96 otherwise): the stop waits while
+// lines are written.
 //
 // `child-once`: `once` lines are still queued when main returns. The once filter is made by the
 // first `once` line, after the exit-time stop is registered, so the statics' destruction reaches it
@@ -21,7 +24,8 @@
 // Usage: logger_exit_test          the parent: runs `child` three times
 //        logger_exit_test once     the parent: runs `child-once` three times
 //        logger_exit_test late     the parent: runs `child-late` three times, checking its stderr
-//        logger_exit_test child | child-once | child-late    (internal) a child
+//        logger_exit_test slow     the parent: runs `child-slow` three times
+//        logger_exit_test child | child-once | child-late | child-slow    (internal) a child
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -45,8 +49,9 @@ public:
 		if (destroyed.load()) {
 			_exit(99);   // a line written through a destroyed handler
 		}
-		calls.fetch_add(1);
-		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		if (calls.fetch_add(1) == 2) {
+			std::this_thread::sleep_for(std::chrono::seconds(1));   // stalled
+		}
 	}
 	~SlowLogger() noexcept override {
 		destroyed.store(true);
@@ -90,6 +95,39 @@ static int child_once() {
 	for (int k = 0; k < kOnceLines; ++k) {
 		L_INFO_ONCE("exit once line {}", k);
 		L_INFO_ONCE("exit once line {}", k);   // the filter drops it
+	}
+	return 0;
+}
+
+// child-slow: kSlowLines lines queued at exit, kSlowLines ms to write.
+constexpr int kSlowLines = 400;
+
+class PacedLogger : public Logger {
+public:
+	void log(int, std::string_view, bool, bool) override {
+		if (destroyed.load()) {
+			_exit(99);
+		}
+		calls.fetch_add(1);
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	~PacedLogger() noexcept override {
+		destroyed.store(true);
+		if (calls.load() != kSlowLines) {
+			std::fprintf(stderr, "child-slow: %d lines written, expected %d\n", calls.load(), kSlowLines);
+			_exit(96);
+		}
+	}
+};
+
+static int child_slow() {
+	Logging::handlers.clear();
+	Logging::add_handler(std::make_unique<PacedLogger>());
+	Logging::config.color = LogColorMode::never;
+	Logging::config.log_level = LOG_INFO;
+	Logging::config.iterm2 = false;
+	for (int k = 0; k < kSlowLines; ++k) {
+		L_INFO("slow line {}", k);
 	}
 	return 0;
 }
@@ -177,6 +215,9 @@ int main(int argc, char** argv) {
 	if (argc == 2 && std::strcmp(argv[1], "child-late") == 0) {
 		return child_late();
 	}
+	if (argc == 2 && std::strcmp(argv[1], "child-slow") == 0) {
+		return child_slow();
+	}
 	if (argc == 2 && std::strcmp(argv[1], "late") == 0) {
 		const char* err = "logger_exit_late.err";
 		for (int round = 0; round < 3; ++round) {
@@ -200,11 +241,12 @@ int main(int argc, char** argv) {
 		return 0;
 	}
 	const bool once = argc == 2 && std::strcmp(argv[1], "once") == 0;
+	const bool slow = argc == 2 && std::strcmp(argv[1], "slow") == 0;
 	// Freed memory is filled, so a destroyed static the LOG thread reads is garbage, not its old bytes.
 	setenv("MallocScribble", "1", 1);
 	setenv("MALLOC_PERTURB_", "165", 1);
 	for (int round = 0; round < 3; ++round) {
-		std::string cmd = std::string("\"") + argv[0] + (once ? "\" child-once" : "\" child");
+		std::string cmd = std::string("\"") + argv[0] + (once ? "\" child-once" : slow ? "\" child-slow" : "\" child");
 		int st = std::system(cmd.c_str());
 		if (st != 0) {
 			std::fprintf(stderr, "round %d: the child's status is %d\n", round, st);
@@ -213,6 +255,8 @@ int main(int argc, char** argv) {
 	}
 	if (once) {
 		std::printf("exit with once lines queued OK: every line written once, no static used after it is destroyed\n");
+	} else if (slow) {
+		std::printf("exit with a slow drain OK: every queued line written, past one 200 ms join\n");
 	} else {
 		std::printf("exit with a stalled LOG thread OK: the child exits 0, no handler used after it is destroyed\n");
 	}

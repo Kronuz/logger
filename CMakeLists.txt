@@ -115,7 +115,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_test(NAME logger_queue COMMAND logger_queue_test)
   set_tests_properties(logger_queue PROPERTIES TIMEOUT 600)
 
-  # Exit without finish() while the LOG thread is stalled in a handler: the exit-time join times out
+  # Exit without finish() while the LOG thread is stalled in a handler: the exit-time stop gives up
   # and the statics are destroyed; the LOG thread must not touch them then.
   add_executable(logger_exit_test test/exit.cc)
   target_link_libraries(logger_exit_test PRIVATE logger)
@@ -124,6 +124,8 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_test(NAME logger_exit_once COMMAND logger_exit_test once)
   # A static destroyed after config, hooks and handlers logs: its lines go to stderr as they are.
   add_test(NAME logger_exit_late COMMAND logger_exit_test late)
+  # Exit with a slow drain (400 lines at 1 ms): the stop waits while lines are written.
+  add_test(NAME logger_exit_slow COMMAND logger_exit_test slow)
 
   # An exception logged on one thread and destroyed by it after the LOG thread wrote the line:
   # the line carries the description made at the call (TSan flags a LOG thread that touches it).
