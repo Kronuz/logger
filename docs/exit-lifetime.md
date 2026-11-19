@@ -2,11 +2,14 @@
 
 The LOG thread writes lines while the process exits. A process that returns from `main` without
 `Logging::finish()` stops it from a static's destructor, the *stop* (`Finisher` in
-`LogWorker::get()`), which ends the LOG thread with one pass and joins it while it writes lines,
-or, after 200 ms without one (a stalled handler), abandons it and waits until it parks. Until the
-stop returns, the LOG thread drains the queues and calls `Logging::emit`; a line refused after the
-stop began is written by `Logging::emit` on the thread that logged it, which may be a static's
-destructor anywhere in the process.
+`LogWorker::get()`), which ends the LOG thread with one pass and joins it while it writes lines.
+It abandons the LOG thread, waits until it parks, and reports on stderr how many lines were not
+written, after 200 ms without a line (`kExitStall`, a stalled handler) or 5 s in all (`kExitCap`).
+The cap keeps exit under the shortest grace a supervisor gives before SIGKILL, with room to spare:
+`docker stop` kills 10 s after SIGTERM, Kubernetes 30 s by default. Until the stop returns, the
+LOG thread drains the queues and calls `Logging::emit`; a line refused after the stop began is
+written by `Logging::emit` on the thread that logged it, which may be a static's destructor
+anywhere in the process.
 
 ## The rule
 

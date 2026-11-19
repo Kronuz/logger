@@ -1119,6 +1119,8 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 		std::make_heap(heads.begin(), heads.end(), later);
 		for (;;) {
 			if (abandoned.load(std::memory_order_acquire)) {
+				Logging::completed_.n.fetch_add(written, std::memory_order_release);   // the stop counts what is left
+				written = 0;
 				return false;
 			}
 			purge();
@@ -1231,12 +1233,21 @@ public:
 		}();
 		static struct Finisher {
 			~Finisher() {
+				using std::chrono::steady_clock;
 				worker->end(1);
-				// Waits while the drain writes; 200 ms without a line is a stalled handler.
-				for (auto seen = worker->taken_.load(std::memory_order_relaxed); !worker->join(200ms);) {
+				// Waits while the drain writes, up to kExitCap in all; kExitStall without a line is a
+				// stalled handler.
+				const auto cap = steady_clock::now() + kExitCap;
+				for (auto seen = worker->taken_.load(std::memory_order_relaxed);
+						!worker->join(std::min(steady_clock::now() + kExitStall, cap));) {
 					const auto now = worker->taken_.load(std::memory_order_relaxed);
-					if (now == seen) {
+					const bool capped = steady_clock::now() >= cap;
+					if (now == seen || capped) {
 						worker->abandon();
+						char msg[128];
+						const int n = std::snprintf(msg, sizeof msg, "logger: exit stopped the LOG thread (%s): %ld lines not written\n",
+							capped ? "5 s cap" : "stalled 200 ms", Logging::pending_count());
+						write_all(STDERR_FILENO, msg, static_cast<std::size_t>(std::min<int>(n, sizeof msg - 1)));
 						break;
 					}
 					seen = now;
@@ -1247,7 +1258,12 @@ public:
 		return *worker;
 	}
 
-	// The exit-time drain stalled: the statics (handlers, config) are about to be destroyed, so the
+	// The exit-time stop: it gives up on a drain that writes no line for kExitStall (a stalled handler),
+	// and on any after kExitCap, under `docker stop`'s 10 s SIGTERM-to-SIGKILL grace (Kubernetes': 30 s).
+	static constexpr auto kExitStall = 200ms;
+	static constexpr auto kExitCap = 5s;
+
+	// The exit-time drain stalled or ran out: the statics (handlers, config) are about to be destroyed, so the
 	// LOG thread writes nothing more. It finishes the line it is in, then parks.
 	void abandon() noexcept {
 		abandoned.store(true, std::memory_order_release);
