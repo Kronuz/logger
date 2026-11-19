@@ -34,6 +34,7 @@
 #include <cstdint>         // for uint8_t, uint32_t
 #include <cstdio>          // for snprintf
 #include <cstdlib>         // for std::getenv
+#include <cstring>         // for std::strlen, std::memcmp, std::memcpy
 #include <ctime>           // for localtime_r, std::tm
 #include <exception>       // for std::rethrow_exception
 #include <fcntl.h>         // for open, O_WRONLY, O_CREAT, O_APPEND
@@ -52,6 +53,19 @@
 #endif
 
 using namespace std::chrono_literals;
+
+
+namespace logger_detail {
+// Storage whose object is never destroyed. The LOG thread is stopped at exit by a static made on the
+// first queued line, so whatever the logger makes after that must outlive it, and a line written
+// while statics are destroyed must find what it reaches (docs/exit-lifetime.md).
+template <typename T>
+union Immortal {
+	T value;
+	constexpr Immortal() : value() {}
+	~Immortal() {}
+};
+}  // namespace logger_detail
 
 
 LogConfig Logging::config;
@@ -234,54 +248,47 @@ log_indent() noexcept
 }
 
 
-// A severity marker: a colored block glyph followed by a reset, built from
-// term-color's stacked escapes (16 / 256 / truecolor) so render() collapses it to
-// whatever depth the terminal supports. The leading bar carries the level at a
-// glance; its width tapers as severity drops.
-static std::string
-make_marker(std::string_view color, std::string_view glyph)
-{
-	std::string s(color);
-	s += glyph;
-	s += std::string_view(clear_color());
-	return s;
-}
+// The palette: Xapiand's long-standing severity colors, as term-color stacked escapes that
+// render() collapses to whatever depth the terminal supports. Every constant here is built at
+// compile time and has no destructor, so a line written while statics are destroyed finds it.
+namespace {
+constexpr auto kRed = rgb(238, 82, 83);
+constexpr auto kDarkRed = rgb(179, 57, 57);
+constexpr auto kOrange = rgb(255, 177, 66);
+constexpr auto kSky = rgb(116, 185, 255);
+constexpr auto kBlue = rgb(63, 119, 179);
+constexpr auto kDim = rgb(105, 105, 105);
+constexpr auto kReset = clear_color();
 
-// One marker per syslog priority (LOG_EMERG=0 .. LOG_DEBUG=7), plus a blank
-// "verbose" slot. The palette matches Xapiand's long-standing severity colors. A
+// A severity marker: a colored block glyph and a reset. The bar's width tapers as severity drops.
+constexpr auto kMarkEmerg = kRed + "█" + kReset;
+constexpr auto kMarkAlert = kRed + "▉" + kReset;
+constexpr auto kMarkCrit = kRed + "▊" + kReset;
+constexpr auto kMarkErr = kDarkRed + "▋" + kReset;
+constexpr auto kMarkWarning = kOrange + "▌" + kReset;
+constexpr auto kMarkNotice = kSky + "▍" + kReset;
+constexpr auto kMarkInfo = kBlue + "▎" + kReset;
+constexpr auto kMarkDebug = kDim + "▏" + kReset;
+}  // namespace
+
+// One marker per syslog priority (LOG_EMERG=0 .. LOG_DEBUG=7), plus a blank "verbose" slot. A
 // host can still override any entry via config.markers.
-static const std::string priorities[MAX_LOG_PRIORITY + 1] = {
-	make_marker(std::string_view(rgb(238, 82, 83)),  "█"),  // LOG_EMERG   0
-	make_marker(std::string_view(rgb(238, 82, 83)),  "▉"),  // LOG_ALERT   1
-	make_marker(std::string_view(rgb(238, 82, 83)),  "▊"),  // LOG_CRIT    2
-	make_marker(std::string_view(rgb(179, 57, 57)),  "▋"),  // LOG_ERR     3
-	make_marker(std::string_view(rgb(255, 177, 66)), "▌"),  // LOG_WARNING 4
-	make_marker(std::string_view(rgb(116, 185, 255)), "▍"), // LOG_NOTICE  5
-	make_marker(std::string_view(rgb(63, 119, 179)), "▎"),  // LOG_INFO    6
-	make_marker(std::string_view(rgb(105, 105, 105)), "▏"), // LOG_DEBUG   7
-	"",                                                      // verbose   > 7
+static constexpr std::string_view priorities[MAX_LOG_PRIORITY + 1] = {
+	kMarkEmerg, kMarkAlert, kMarkCrit, kMarkErr, kMarkWarning, kMarkNotice, kMarkInfo, kMarkDebug, "",
 };
-
 
 // The palette's colors alone, for config.tint.
-static const std::string tints[MAX_LOG_PRIORITY] = {
-	std::string(std::string_view(rgb(238, 82, 83))),   // LOG_EMERG
-	std::string(std::string_view(rgb(238, 82, 83))),   // LOG_ALERT
-	std::string(std::string_view(rgb(238, 82, 83))),   // LOG_CRIT
-	std::string(std::string_view(rgb(179, 57, 57))),   // LOG_ERR
-	std::string(std::string_view(rgb(255, 177, 66))),  // LOG_WARNING
-	std::string(std::string_view(rgb(116, 185, 255))), // LOG_NOTICE
-	std::string(std::string_view(rgb(63, 119, 179))),  // LOG_INFO
-	std::string(std::string_view(rgb(105, 105, 105))), // LOG_DEBUG
+static constexpr std::string_view tints[MAX_LOG_PRIORITY] = {
+	kRed, kRed, kRed, kDarkRed, kOrange, kSky, kBlue, kDim,
 };
 
-
-// Grey ramp for the timestamp gradient, as term-color stacked escapes (collapsed
-// per-terminal by render()). default_timestamp() picks among these per digit group.
-static const std::string kGrey60 {std::string_view(rgb( 60,  60,  60))};
-static const std::string kGrey94 {std::string_view(rgb( 94,  94,  94))};
-static const std::string kGrey162{std::string_view(rgb(162, 162, 162))};
-static const std::string kGrey230{std::string_view(rgb(230, 230, 230))};
+// Grey ramp for the timestamp gradient. default_timestamp() picks among these per digit group.
+namespace {
+constexpr auto kGrey60 = rgb(60, 60, 60);
+constexpr auto kGrey94 = rgb(94, 94, 94);
+constexpr auto kGrey162 = rgb(162, 162, 162);
+constexpr auto kGrey230 = rgb(230, 230, 230);
+}  // namespace
 
 
 // Bounded dedup for `once` lines. Two alternating sets: when the active set
@@ -437,7 +444,7 @@ render(int priority, std::string_view str, bool with_priority, bool with_endl, b
 	std::string buf;
 	if (with_priority) {
 		const std::string& m = Logging::config.markers[priority];
-		buf += m.empty() ? priorities[priority] : m;
+		buf += m.empty() ? priorities[priority] : std::string_view(m);
 	}
 	buf += str;
 	if (with_endl) {
@@ -477,21 +484,30 @@ put_digits(std::string& s, unsigned long v, int width)
 static const std::tm&
 local_tm(std::time_t t)
 {
+	// Trivially destructible, so a line written after the thread's thread-locals are destroyed
+	// (a static's destructor logging at exit) still finds it. A TZ value too long to keep is not cached.
 	struct Cache {
 		std::time_t sec = 0;
 		bool valid = false;
 		bool has_tz = false;
-		std::string tz;
+		std::size_t tz_len = 0;
+		char tz[64];
 		std::tm tm{};
 	};
+	static_assert(std::is_trivially_destructible_v<Cache>);
 	static thread_local Cache c;
 	const char* tz = std::getenv("TZ");
-	if (!c.valid || c.sec != t || (tz != nullptr) != c.has_tz || (tz != nullptr && c.tz != tz)) {
+	const std::size_t len = tz != nullptr ? std::strlen(tz) : 0;
+	if (!c.valid || c.sec != t || (tz != nullptr) != c.has_tz
+			|| (tz != nullptr && (len != c.tz_len || std::memcmp(c.tz, tz, len) != 0))) {
 		localtime_r(&t, &c.tm);
 		c.sec = t;
-		c.valid = true;
 		c.has_tz = tz != nullptr;
-		c.tz.assign(tz != nullptr ? tz : "");
+		c.valid = len < sizeof c.tz;
+		c.tz_len = c.valid ? len : 0;
+		if (c.valid && tz != nullptr) {
+			std::memcpy(c.tz, tz, len);
+		}
 	}
 	return c.tm;
 }
@@ -506,10 +522,7 @@ logger_detail::default_timestamp(std::chrono::system_clock::time_point tp)
 	}
 
 	const bool grad = cfg.timestamp_gradient;
-	auto g = [grad](const std::string& col) -> const std::string& {
-		static const std::string none;
-		return grad ? col : none;
-	};
+	auto g = [grad](std::string_view col) { return grad ? col : std::string_view(); };
 
 	auto t = system_clock::to_time_t(tp);
 	long us = static_cast<long>(duration_cast<microseconds>(tp.time_since_epoch()).count() % 1000000);
@@ -524,11 +537,11 @@ logger_detail::default_timestamp(std::chrono::system_clock::time_point tp)
 	std::string s;
 	s.reserve(96);
 
-	auto d2 = [&](int v, const std::string& col) {
+	auto d2 = [&](int v, std::string_view col) {
 		s += col;
 		put_digits(s, static_cast<unsigned long>(v), 2);
 	};
-	auto d4 = [&](const std::string& col) {
+	auto d4 = [&](std::string_view col) {
 		s += col;
 		if (plain) {
 			put_digits(s, static_cast<unsigned long>(tm.tm_year + 1900), 4);
@@ -827,7 +840,7 @@ struct Ring : RingProducer {
 };
 
 std::atomic<Ring*> ring_list{nullptr};
-std::mutex shared_ring_mutex;               // guards the producer's half of the shared queue
+Immortal<std::mutex> shared_ring_mutex;     // guards the producer's half of the shared queue
 Ring* shared_ring = nullptr;
 
 static Ring* new_ring(int owner) noexcept {
@@ -1255,7 +1268,7 @@ public:
 			g = static_cast<Ring*>(ring_attach());
 		}
 		if (g == nullptr) {
-			lk = std::unique_lock<std::mutex>(shared_ring_mutex);
+			lk = std::unique_lock<std::mutex>(shared_ring_mutex.value);
 			if (shared_ring == nullptr) {
 				get();
 				shared_ring = new_ring(kShared);
@@ -1762,9 +1775,9 @@ Logging::emit(const logger_detail::Emit& line)
 
 	// `once` dedup: emit only the first occurrence of this (message, token).
 	if (line.once != 0) {
-		static OnceFilter filter;
+		static logger_detail::Immortal<OnceFilter> filter;   // made after the exit-time stop is registered
 		uint64_t key = std::hash<std::string_view>{}(line.str) ^ (line.once * 0x9E3779B97F4A7C15ULL);
-		if (filter.seen_or_add(key)) {
+		if (filter.value.seen_or_add(key)) {
 			return;
 		}
 	}

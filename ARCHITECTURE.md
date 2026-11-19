@@ -124,6 +124,11 @@ destroyed, so the destructor sets `abandoned`: the LOG thread finishes the line 
 nothing more (what is queued is lost, as at any timed-out join) and parks, and the destructor waits
 for that before returning.
 
+That static is made at the first queued line, so what the logger makes after it is destroyed while
+the LOG thread still runs. Everything the logger owns that a written line or the drain reaches has
+no destructor (`constexpr`, or trivially destructible) or is never destroyed (`Immortal<T>`, such as
+the `once` filter); `docs/exit-lifetime.md` lists each one.
+
 ## Deferred lines ride the LOG thread's wheel
 
 A deferred line waits in a `wheel::timer_wheel` from [Kronuz/wheel](https://github.com/Kronuz/wheel)
