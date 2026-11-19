@@ -703,6 +703,10 @@ static void test_light_swap(int threads, int per) {
 }
 
 // The child of the exit test: lines from several threads and from main, then return without finish().
+// Sized so the drain fits the exit-time stop's 5 s cap with room under a sanitizer and a loaded host
+// (TSan Debug drains about 0.3 ms a line alone).
+constexpr int kExitPer = 200, kExitMain = 100;
+
 static int exit_child(const char* path) {
 	Logging::handlers.clear();
 	Logging::add_handler(std::make_unique<StreamLogger>(path));
@@ -712,7 +716,7 @@ static int exit_child(const char* path) {
 	std::vector<std::thread> ts;
 	for (int t = 0; t < 4; ++t) {
 		ts.emplace_back([t] {
-			for (int k = 0; k < 800; ++k) {
+			for (int k = 0; k < kExitPer; ++k) {
 				if (k % 10 == 0) {
 					Logging::do_log(false, std::chrono::steady_clock::now(), true, LOG_INFO,
 						"exit t" + std::to_string(t) + ":" + std::to_string(k));
@@ -725,7 +729,7 @@ static int exit_child(const char* path) {
 	for (auto& th : ts) {
 		th.join();
 	}
-	for (int k = 0; k < 400; ++k) {
+	for (int k = 0; k < kExitMain; ++k) {
 		L_INFO("exit t{}:{}", 4, k);
 	}
 	return 0;   // no finish(): the LOG thread is stopped at exit and writes what is queued
@@ -754,7 +758,7 @@ static void test_exit_flush() {
 			++next[static_cast<size_t>(t)];
 			++n;
 		}
-		CHECK(n == 4 * 800 + 400);
+		CHECK(n == 4 * kExitPer + kExitMain);
 	}
 	std::remove(path);
 	std::printf("queue exit flush OK: every line of a process that returned from main without finish()\n");
