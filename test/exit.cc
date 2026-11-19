@@ -11,8 +11,9 @@
 // lines are written.
 //
 // `child-capped`: the drain is steady but too long: 200 lines at 50 ms each, 10 s against the stop's
-// 5 s cap. The stop cuts it and reports on stderr how many lines it did not write; the parent checks
-// that count and the handler's own add up to 200, and that some were cut.
+// 5 s cap. The stop cuts it and reports on stderr at most how many lines it did not write; with one
+// producer and no deferred lines the bound is exact, so the parent checks that count and the
+// handler's own add up to 200, and that some were cut.
 //
 // `child-once`: `once` lines are still queued when main returns. The once filter is made by the
 // first `once` line, after the exit-time stop is registered, so the statics' destruction reaches it
@@ -401,8 +402,8 @@ int main(int argc, char** argv) {
 		int st = std::system(cmd.c_str());
 		const std::string text = read_file(err);
 		long cut = -1, written = -1;
-		if (auto at = text.find("(5 s cap): "); at != std::string::npos) {
-			cut = std::strtol(text.c_str() + at + 11, nullptr, 10);
+		if (auto at = text.find("(5 s cap): at most "); at != std::string::npos) {
+			cut = std::strtol(text.c_str() + at + 19, nullptr, 10);
 		}
 		if (auto at = text.find("child-capped: "); at != std::string::npos) {
 			written = std::strtol(text.c_str() + at + 14, nullptr, 10);

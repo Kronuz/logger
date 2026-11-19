@@ -964,6 +964,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	std::atomic<std::uint64_t> taken_{0};    // lines a pass took, for the exit-time stop to see progress
 	const pid_t pid_ = ::getpid();           // the process the LOG thread runs in (not a fork child)
 	std::atomic<std::thread::id> tid_{};     // the LOG thread, once it runs
+	std::size_t not_due_ = 0;                // abandoned: deferred lines left filed, not yet due (read once parked)
 	std::atomic<bool> parked{false};         // the LOG thread has seen `abandoned` and writes nothing
 	// LOG thread only: deferred lines filed in a wheel by due time; a pass takes the due ones into
 	// `batch`, sorted by (due, call time, filing order), and merges it with the queues' lines.
@@ -1214,6 +1215,10 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	void close() {
 		worker_state.fetch_or(kClosed, std::memory_order_seq_cst);
 		if (abandoned.load(std::memory_order_acquire)) {
+			if (wheel_) {   // the due lines leave the wheel unwritten; what stays is not due
+				wheel_->expire(static_cast<std::uint64_t>(steady_ns(std::chrono::steady_clock::now())), [](wheel::timer_entry&) {});
+				not_due_ = wheel_->size();
+			}
 			final_done.store(true, std::memory_order_release);
 			return;   // what is queued is not written, and nothing is released that could log
 		}
@@ -1261,8 +1266,8 @@ public:
 					if (now == seen || capped) {
 						worker->abandon();
 						char msg[128];
-						const int n = std::snprintf(msg, sizeof msg, "logger: exit stopped the LOG thread (%s): %ld lines not written\n",
-							capped ? "5 s cap" : "stalled 200 ms", Logging::pending_count());
+						const int n = std::snprintf(msg, sizeof msg, "logger: exit stopped the LOG thread (%s): at most %ld lines not written\n",
+							capped ? "5 s cap" : "stalled 200 ms", worker->unwritten_due());
 						write_all(STDERR_FILENO, msg, static_cast<std::size_t>(std::min<int>(n, sizeof msg - 1)));
 						break;
 					}
@@ -1278,6 +1283,13 @@ public:
 	// and on any after kExitCap, under `docker stop`'s 10 s SIGTERM-to-SIGKILL grace (Kubernetes': 30 s).
 	static constexpr auto kExitStall = 200ms;
 	static constexpr auto kExitCap = 5s;
+
+	// Once the LOG thread parked: the lines queued or filed and not written, less the deferred lines
+	// not yet due, which no exit writes. A bound: a producer that raced the stop may write its own.
+	long unwritten_due() const noexcept {
+		const long n = Logging::pending_count() - static_cast<long>(not_due_);
+		return n > 0 ? n : 0;
+	}
 
 	// The exit-time drain stalled or ran out: the statics (handlers, config) are about to be destroyed, so the
 	// LOG thread writes nothing more. It finishes the line it is in, then parks.

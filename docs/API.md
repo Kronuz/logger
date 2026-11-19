@@ -19,7 +19,11 @@ Optional, each with a std default: `describe_exception`, `backtrace`,
 `thread_name`, `timestamp`. A host injects richer versions (e.g. real backtraces,
 named threads) without the core depending on them. `describe_exception` runs on the
 thread that logs the line, when it is logged: the line keeps the text, never the
-exception, which its thread may destroy before the LOG thread writes the line.
+exception, which its thread may destroy before the LOG thread writes the line. So it
+runs for every exception line, a `clears` watchdog's that is cancelled and never
+written among them, and its cost is the logging thread's. A hook that throws gives
+the text "unknown exception"; nothing propagates out of the log call. After the
+logger's teardown at exit the std default describes the exception instead.
 
 ## Sinks (`Logger`)
 
