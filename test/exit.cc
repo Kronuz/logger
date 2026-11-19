@@ -22,8 +22,10 @@
 //
 // `child-late`: a static of this file, destroyed after logger.cc's statics (this file is linked
 // first, so its statics are made first; the child exits 97 if the order differs), logs a routine
-// and a severe line as it is destroyed. Both must reach stderr as they are, after the handler
-// (which prefixes its lines with "sink: ") is gone.
+// and a severe line as it is destroyed, and an `L_EXC` line. All must reach stderr as they are, after
+// the handler (which prefixes its lines with "sink: ") is gone; the exception line carries its
+// description, made without the host's describe hook, which is destroyed with `Logging::hooks` (it
+// is heap-held, flags its destruction, and exits 95 if called after it).
 //
 // Usage: logger_exit_test          the parent: runs `child` three times
 //        logger_exit_test once     the parent: runs `child-once` three times
@@ -36,7 +38,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <array>
+#include <exception>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <unistd.h>
@@ -185,6 +190,25 @@ public:
 	}
 };
 
+static std::atomic<bool> hook_destroyed{false};
+
+// A describe hook too big for std::function's buffer, so it is freed with Logging::hooks.
+struct DescribeHook {
+	bool armed = false;
+	std::array<char, 256> pad{};
+	std::string operator()(std::exception_ptr) const {
+		if (hook_destroyed.load()) {
+			_exit(95);   // the host's hook called after Logging::hooks was destroyed
+		}
+		return "described by the hook" + std::string(pad[0] != 0 ? "!" : "");
+	}
+	~DescribeHook() {
+		if (armed) {
+			hook_destroyed.store(true);
+		}
+	}
+};
+
 struct LateLogger {
 	bool armed = false;
 	~LateLogger() {
@@ -197,6 +221,15 @@ struct LateLogger {
 		}
 		L_WARNING("late line from a static destructor");
 		L_CRIT("late severe line from a static destructor");
+		if (!hook_destroyed.load()) {
+			std::fprintf(stderr, "child-late: this static is destroyed before the hooks; nothing tested\n");
+			_exit(97);
+		}
+		try {
+			throw std::runtime_error("late boom");
+		} catch (...) {
+			L_EXC("late exception line");
+		}
 	}
 };
 static LateLogger late;
@@ -204,6 +237,8 @@ static LateLogger late;
 static int child_late() {
 	Logging::handlers.clear();
 	Logging::add_handler(std::make_unique<MarkingLogger>());
+	Logging::hooks.describe_exception = DescribeHook{};
+	Logging::hooks.describe_exception.target<DescribeHook>()->armed = true;
 	Logging::config.color = LogColorMode::never;
 	Logging::config.log_level = LOG_INFO;
 	Logging::config.iterm2 = false;
@@ -290,10 +325,11 @@ int main(int argc, char** argv) {
 			CHECK(text.find("sink: ") != std::string::npos && text.find("first line\n") != std::string::npos);
 			const bool routine = text.find("\nlate line from a static destructor\n") != std::string::npos;
 			const bool severe = text.find("\nlate severe line from a static destructor\n") != std::string::npos;
-			if (!routine || !severe) {
+			const bool exc = text.find("\nlate exception line: late boom\n") != std::string::npos;
+			if (!routine || !severe || !exc) {
 				std::fprintf(stderr, "round %d: a late line is missing from the child's stderr:\n%s", round, text.c_str());
 			}
-			CHECK(routine && severe);
+			CHECK(routine && severe && exc);
 		}
 		std::remove(err);
 		std::printf("exit with a static logging after the teardown OK: its lines reach stderr as they are\n");
