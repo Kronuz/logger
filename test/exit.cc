@@ -174,15 +174,19 @@ public:
 	}
 };
 
+// The deferred lines' handles, never destroyed so the lines stay filed; a global root keeps them
+// reachable for LeakSanitizer.
+static std::vector<Log>* capped_deferred = nullptr;
+
 static int child_capped() {
 	Logging::handlers.clear();
 	Logging::add_handler(std::make_unique<SteadyLogger>());
 	Logging::config.color = LogColorMode::never;
 	Logging::config.log_level = LOG_INFO;
 	Logging::config.iterm2 = false;
-	auto* keep = new std::vector<Log>;   // never destroyed: the deferred lines stay filed
+	capped_deferred = new std::vector<Log>;
 	for (int k = 0; k < 5; ++k) {
-		keep->push_back(L_DELAYED(false, std::chrono::hours(1), LOG_WARNING, "deferred line {}", k));
+		capped_deferred->push_back(L_DELAYED(false, std::chrono::hours(1), LOG_WARNING, "deferred line {}", k));
 	}
 	for (int k = 0; k < kCappedLines; ++k) {
 		L_INFO("capped line {}", k);
