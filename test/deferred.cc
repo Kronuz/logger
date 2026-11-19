@@ -5,6 +5,8 @@
 //   logger_deferred_test stress    8 producers, cancelled and ring lines mixed in: exactly once,
 //                                  none cancelled written, never early, each thread's order
 //   logger_deferred_test ties      lines with one due time and one call time: written in filing order
+//   logger_deferred_test slack     a deferred line due just after the sleeping LOG thread's wake wakes
+//                                  it (the wake slack, kWakeSlackNs); one due well after does not
 //
 // Order oracle (the contract, as test/order.cc): for lines i < j of one thread (i logged first) with
 // due_i <= due_j, i is written before j. Due is the `wakeup` handed to do_log.
@@ -314,6 +316,33 @@ static void ties(Capture* c) {
 	verify(c, logged);
 }
 
+// The LOG thread sleeps to a held line's due time W. A deferred line due 5 ms after W is within the
+// 8 ms wake slack, so its producer wakes the thread to file it; one due 50 ms after W is not. Counts
+// the producers' notifies (logger_detail::worker_notifies) over rounds, each settling 40 ms first.
+static void slack(Capture* c) {
+	constexpr int kRounds = 20;
+	long near_notifies = 0, far_notifies = 0;
+	for (int r = 0; r < kRounds; ++r) {
+		const auto held_due = clk::now() + 400ms;
+		auto held = Logging::do_log(true, held_due, true, LOG_INFO, "held");   // cancelled by its handle
+		std::this_thread::sleep_for(40ms);   // the LOG thread files it and sleeps until its due time
+		long before = logger_detail::worker_notifies.load();
+		auto far = Logging::do_log(true, held_due + 50ms, true, LOG_INFO, "far");
+		far_notifies += logger_detail::worker_notifies.load() - before;
+		std::this_thread::sleep_for(10ms);
+		before = logger_detail::worker_notifies.load();
+		auto near = Logging::do_log(true, held_due + 5ms, true, LOG_INFO, "near");
+		near_notifies += logger_detail::worker_notifies.load() - before;
+		CHECK(near.clear() && far.clear() && held.clear());
+		std::this_thread::sleep_for(10ms);
+	}
+	std::printf("notifies over %d rounds: due 5 ms past the wake %ld, due 50 ms past %ld\n", kRounds,
+		near_notifies, far_notifies);
+	CHECK(c->size() == 0);
+	CHECK(near_notifies >= kRounds / 2);
+	CHECK(far_notifies == 0);
+}
+
 int main(int argc, char** argv) {
 	const std::string mode = argc > 1 ? argv[1] : "";
 	const bool stressed = mode == "stress";
@@ -333,6 +362,8 @@ int main(int argc, char** argv) {
 		stress(c);
 	} else if (mode == "ties") {
 		ties(c);
+	} else if (mode == "slack") {
+		slack(c);
 	} else {
 		single(c);
 	}

@@ -100,6 +100,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_test(NAME logger_deferred COMMAND logger_deferred_test)
   add_test(NAME logger_deferred_stress COMMAND logger_deferred_test stress)
   add_test(NAME logger_deferred_ties COMMAND logger_deferred_test ties)
+  add_test(NAME logger_deferred_slack COMMAND logger_deferred_test slack)
 
   # How soon a routine line is written: at once when nothing is pending, in the 1 ms batch otherwise.
   add_executable(logger_wake_test test/wake.cc)
