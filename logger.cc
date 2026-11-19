@@ -1214,17 +1214,19 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	// rest are released.
 	void close() {
 		worker_state.fetch_or(kClosed, std::memory_order_seq_cst);
-		if (abandoned.load(std::memory_order_acquire)) {
+		const auto now = steady_ns(std::chrono::steady_clock::now());
+		if (!abandoned.load(std::memory_order_acquire)) {
+			constexpr auto all = std::numeric_limits<std::int64_t>::max();
+			while (pass(all, all, now)) {   // every queued line, and the deferred lines due by now
+			}
+		}
+		if (abandoned.load(std::memory_order_acquire)) {   // before the last look or during it
 			if (wheel_) {   // the due lines leave the wheel unwritten; what stays is not due
-				wheel_->expire(static_cast<std::uint64_t>(steady_ns(std::chrono::steady_clock::now())), [](wheel::timer_entry&) {});
+				wheel_->expire(static_cast<std::uint64_t>(now), [](wheel::timer_entry&) {});
 				not_due_ = wheel_->size();
 			}
 			final_done.store(true, std::memory_order_release);
 			return;   // what is queued is not written, and nothing is released that could log
-		}
-		const auto now = steady_ns(std::chrono::steady_clock::now());
-		constexpr auto all = std::numeric_limits<std::int64_t>::max();
-		while (pass(all, all, now)) {   // every queued line, and the deferred lines due by now
 		}
 		final_done.store(true, std::memory_order_release);
 		wheel_.reset();   // releases what is still filed
