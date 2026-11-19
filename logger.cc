@@ -1227,6 +1227,12 @@ public:
 	// stopped as Logging::finish(1) would.
 	static LogWorker& get() {
 		static LogWorker* worker = [] {
+			// The clocks a line's stamp is read with are made here, so the LOG thread reads them after
+			// its creation, never racing their first use.
+#if defined(__APPLE__)
+			(void)mach_clock();
+#endif
+			(void)tick_stamps();
 			auto* w = new LogWorker;
 			w->run();
 			return w;
