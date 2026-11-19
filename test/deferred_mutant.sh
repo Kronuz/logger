@@ -1,9 +1,9 @@
 #!/bin/sh
 # Mutants of the LOG thread's wheel that test/deferred.cc must kill: a deferred line filed 3 ms
 # early, and 3 ms late, a batch that leaves lines tied on due and call time in any order, and a
-# producer that drops the 8 ms wake slack of a deferred line. Each builds a copy of the tree with
-# logger.cc changed and runs logger_deferred_test (the ties and slack mutants with their own
-# argument); exits 0 only if the test fails on every mutant. The late mutant is
+# producer that drops the 8 ms wake slack of a deferred line (wake_deadline). Each builds a copy of
+# the tree with logger.cc changed and runs logger_deferred_test (the ties and slack mutants with
+# their own argument); exits 0 only if the test fails on every mutant. The late mutant is
 # killed by the lateness bound, so the test runs with DEFERRED_LATENESS=1.
 #   test/deferred_mutant.sh [BUILD_ROOT]     (default .scratch/mutant)
 set -eu
@@ -36,5 +36,5 @@ ARM='wheel_->arm(l, static_cast<std::uint64_t>(due));'
 mutant early "$ARM" 'wheel_->arm(l, static_cast<std::uint64_t>(due - 3 * kTickNs));' || fail=1
 mutant late "$ARM" 'wheel_->arm(l, static_cast<std::uint64_t>(due + 3 * kTickNs));' || fail=1
 mutant ties 'return static_cast<std::int32_t>(a.seq - b.seq) < 0;' 'return false;' ties || fail=1
-mutant slack 'wake_for(ordered ? due : due - kWakeSlackNs);' 'wake_for(due);' slack || fail=1
+mutant slack 'return ordered ? due : due - kWakeSlackNs;' 'return due;' slack || fail=1
 exit $fail

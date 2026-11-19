@@ -34,7 +34,7 @@ if "$OUT/wake-slack/build/logger_wake_test"; then
 	exit 1
 fi
 echo "mutant wake-slack: killed"
-build wake-slack-task 'wake_for(ordered ? due : due - kWakeSlackNs);' 'wake_for(due - kWakeSlackNs);'
+build wake-slack-task 'wake_for(wake_deadline(ordered, due));' 'wake_for(wake_deadline(false, due));'
 if "$OUT/wake-slack-task/build/logger_wake_test"; then
 	echo "mutant wake-slack-task: survived"
 	exit 1

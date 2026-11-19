@@ -1391,7 +1391,7 @@ public:
 			return false;
 		}
 		if ((st & kSleeping) != 0) {
-			get().wake_for(ordered ? due : due - kWakeSlackNs);
+			get().wake_for(wake_deadline(ordered, due));
 		}
 		return true;
 	}
@@ -1496,6 +1496,13 @@ logger_detail::queue_count() noexcept
 		++n;
 	}
 	return n;
+}
+
+
+std::int64_t
+logger_detail::wake_deadline(bool ordered, std::int64_t due) noexcept
+{
+	return ordered ? due : due - kWakeSlackNs;
 }
 
 

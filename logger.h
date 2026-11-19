@@ -272,6 +272,9 @@ std::chrono::steady_clock::time_point stamp_time(std::uint64_t stamp) noexcept;
 // wake it; it has closed: write the line here unless it got it).
 RingProducer* ring_attach() noexcept;
 std::size_t queue_count() noexcept;   // queues made so far (tests)
+// The steady_clock nanosecond a task's producer must wake a sleeping LOG thread by: `due`, less the
+// wake slack for a deferred task (not `ordered`). It wakes the thread if that is before its wake.
+std::int64_t wake_deadline(bool ordered, std::int64_t due) noexcept;
 char* ring_room(RingProducer& ring, std::size_t need) noexcept;
 void ring_published(RingProducer& ring, unsigned state, std::uint64_t at) noexcept;
 long pending_count() noexcept;        // Logging::pending_count()
