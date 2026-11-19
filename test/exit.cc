@@ -10,6 +10,10 @@
 // longer than one 200 ms join. Every line is written (status 96 otherwise): the stop waits while
 // lines are written.
 //
+// `child-capped`: the drain is steady but too long: 200 lines at 50 ms each, 10 s against the stop's
+// 5 s cap. The stop cuts it and reports on stderr how many lines it did not write; the parent checks
+// that count and the handler's own add up to 200, and that some were cut.
+//
 // `child-once`: `once` lines are still queued when main returns. The once filter is made by the
 // first `once` line, after the exit-time stop is registered, so the statics' destruction reaches it
 // first while the LOG thread still writes `once` lines, through the stop's last look. The handler
@@ -25,7 +29,8 @@
 //        logger_exit_test once     the parent: runs `child-once` three times
 //        logger_exit_test late     the parent: runs `child-late` three times, checking its stderr
 //        logger_exit_test slow     the parent: runs `child-slow` three times
-//        logger_exit_test child | child-once | child-late | child-slow    (internal) a child
+//        logger_exit_test capped   the parent: runs `child-capped` once, checking its stderr
+//        logger_exit_test child | child-once | child-late | child-slow | child-capped    (internal)
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -132,6 +137,36 @@ static int child_slow() {
 	return 0;
 }
 
+// child-capped: kCappedLines lines queued at exit, 50 ms each, twice the stop's cap.
+constexpr int kCappedLines = 200;
+
+class SteadyLogger : public Logger {
+public:
+	void log(int, std::string_view, bool, bool) override {
+		if (destroyed.load()) {
+			_exit(99);
+		}
+		calls.fetch_add(1);
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	}
+	~SteadyLogger() noexcept override {
+		destroyed.store(true);
+		std::fprintf(stderr, "child-capped: %d lines written\n", calls.load());
+	}
+};
+
+static int child_capped() {
+	Logging::handlers.clear();
+	Logging::add_handler(std::make_unique<SteadyLogger>());
+	Logging::config.color = LogColorMode::never;
+	Logging::config.log_level = LOG_INFO;
+	Logging::config.iterm2 = false;
+	for (int k = 0; k < kCappedLines; ++k) {
+		L_INFO("capped line {}", k);
+	}
+	return 0;
+}
+
 // child-late: a handler that marks its lines and its destruction, and a static that logs after it.
 class MarkingLogger : public Logger {
 public:
@@ -217,6 +252,30 @@ int main(int argc, char** argv) {
 	}
 	if (argc == 2 && std::strcmp(argv[1], "child-slow") == 0) {
 		return child_slow();
+	}
+	if (argc == 2 && std::strcmp(argv[1], "child-capped") == 0) {
+		return child_capped();
+	}
+	if (argc == 2 && std::strcmp(argv[1], "capped") == 0) {
+		const char* err = "logger_exit_capped.err";
+		std::string cmd = std::string("\"") + argv[0] + "\" child-capped 2>" + err;
+		int st = std::system(cmd.c_str());
+		const std::string text = read_file(err);
+		long cut = -1, written = -1;
+		if (auto at = text.find("(5 s cap): "); at != std::string::npos) {
+			cut = std::strtol(text.c_str() + at + 11, nullptr, 10);
+		}
+		if (auto at = text.find("child-capped: "); at != std::string::npos) {
+			written = std::strtol(text.c_str() + at + 14, nullptr, 10);
+		}
+		if (st != 0 || cut <= 0 || written < 0 || cut + written != kCappedLines) {
+			std::fprintf(stderr, "the child's status is %d, %ld lines cut, %ld written; its stderr:\n%s", st, cut, written, text.c_str());
+		}
+		CHECK(st == 0);
+		CHECK(cut > 0 && written >= 0 && cut + written == kCappedLines);
+		std::remove(err);
+		std::printf("exit with a drain past the cap OK: %ld lines written, %ld cut and reported\n", written, cut);
+		return 0;
 	}
 	if (argc == 2 && std::strcmp(argv[1], "late") == 0) {
 		const char* err = "logger_exit_late.err";

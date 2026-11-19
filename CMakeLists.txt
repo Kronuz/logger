@@ -126,6 +126,8 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_test(NAME logger_exit_late COMMAND logger_exit_test late)
   # Exit with a slow drain (400 lines at 1 ms): the stop waits while lines are written.
   add_test(NAME logger_exit_slow COMMAND logger_exit_test slow)
+  # Exit with a steady drain past the 5 s cap: the stop cuts it and reports the lines it cut.
+  add_test(NAME logger_exit_capped COMMAND logger_exit_test capped)
 
   # An exception logged on one thread and destroyed by it after the LOG thread wrote the line:
   # the line carries the description made at the call (TSan flags a LOG thread that touches it).
