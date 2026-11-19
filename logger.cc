@@ -670,7 +670,8 @@ static std::string hooked_backtrace() {
 }
 
 // A line's exception, described on the thread that logs it: the line owns the text, and the LOG
-// thread never touches the exception, which its thread may destroy meanwhile.
+// thread never touches the exception, which its thread may destroy meanwhile. After the teardown
+// the host's hook is destroyed, so the std default describes it.
 static std::optional<std::string>
 describe_at_call(const std::exception_ptr& e)
 {
@@ -678,6 +679,9 @@ describe_at_call(const std::exception_ptr& e)
 		return std::nullopt;
 	}
 	try {
+		if (torn_down.load(std::memory_order_relaxed)) {
+			return default_describe_exception(e);
+		}
 		return hooked_describe_exception(e);
 	} catch (...) {
 		return std::string("unknown exception");
