@@ -956,7 +956,8 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	std::condition_variable cv;
 	std::atomic<int> ending{-1};             // finish()'s countdown of passes; -1 until it begins
 	std::atomic<bool> final_done{false};     // the last look at the queues is over
-	std::atomic<bool> abandoned{false};      // the exit-time join timed out: write nothing more
+	std::atomic<bool> abandoned{false};      // the exit-time drain stalled: write nothing more
+	std::atomic<std::uint64_t> taken_{0};    // lines a pass took, for the exit-time stop to see progress
 	std::atomic<bool> parked{false};         // the LOG thread has seen `abandoned` and writes nothing
 	// LOG thread only: deferred lines filed in a wheel by due time; a pass takes the due ones into
 	// `batch`, sorted by (due, call time, filing order), and merges it with the queues' lines.
@@ -1151,6 +1152,7 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 				auto task = std::move(batch[batch_at++].record->wheel_hold);
 				fire(task);
 			}
+			taken_.store(taken_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 		}
 		for (auto* g = first; g != nullptr; g = g->next_ring) {
 			g->rbuf->pub_r.store(g->r, std::memory_order_release);
@@ -1230,8 +1232,14 @@ public:
 		static struct Finisher {
 			~Finisher() {
 				worker->end(1);
-				if (!worker->join(200ms)) {
-					worker->abandon();
+				// Waits while the drain writes; 200 ms without a line is a stalled handler.
+				for (auto seen = worker->taken_.load(std::memory_order_relaxed); !worker->join(200ms);) {
+					const auto now = worker->taken_.load(std::memory_order_relaxed);
+					if (now == seen) {
+						worker->abandon();
+						break;
+					}
+					seen = now;
 				}
 			}
 		} finisher;
@@ -1239,7 +1247,7 @@ public:
 		return *worker;
 	}
 
-	// The exit-time join timed out: the statics (handlers, config) are about to be destroyed, so the
+	// The exit-time drain stalled: the statics (handlers, config) are about to be destroyed, so the
 	// LOG thread writes nothing more. It finishes the line it is in, then parks.
 	void abandon() noexcept {
 		abandoned.store(true, std::memory_order_release);

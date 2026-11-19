@@ -2,11 +2,11 @@
 
 The LOG thread writes lines while the process exits. A process that returns from `main` without
 `Logging::finish()` stops it from a static's destructor, the *stop* (`Finisher` in
-`LogWorker::get()`), which ends the LOG thread with one pass and joins it for 200 ms, or, if the
-join times out, abandons it and waits until it parks. Until the stop returns, the LOG thread drains
-the queues and calls `Logging::emit`; a line refused after the stop began is written by
-`Logging::emit` on the thread that logged it, which may be a static's destructor anywhere in the
-process.
+`LogWorker::get()`), which ends the LOG thread with one pass and joins it while it writes lines,
+or, after 200 ms without one (a stalled handler), abandons it and waits until it parks. Until the
+stop returns, the LOG thread drains the queues and calls `Logging::emit`; a line refused after the
+stop began is written by `Logging::emit` on the thread that logged it, which may be a static's
+destructor anywhere in the process.
 
 ## The rule
 
