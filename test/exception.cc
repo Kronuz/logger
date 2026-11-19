@@ -1,5 +1,5 @@
-// An exception logged with L_EXC on one thread and written by the LOG thread while the throwing
-// thread still holds it; the throwing thread then leaves its catch and destroys the exception. The
+// An exception logged with L_EXC on one thread and written by the LOG thread, a tick later, while the
+// throwing thread still holds it; the throwing thread then leaves its catch and destroys the exception. The
 // line must carry the exception's description, made when it was logged: the LOG thread never
 // touches the exception object. Under TSan a LOG thread that did (a virtual what() on it) races with
 // its destructor, since the sanitizer cannot see the C++ runtime's reference count on the exception.
@@ -50,6 +50,10 @@ int main() {
 	Logging::config.log_level = LOG_INFO;
 	Logging::config.iterm2 = false;
 	L_INFO("start");   // the LOG thread and the clocks, before the threads below
+	// A held watchdog keeps a line pending, so each L_EXC below is due a tick after its call: its
+	// thread drops its handle before the LOG thread writes the line, and nothing the LOG thread does
+	// afterwards orders it before the thread's catch ends.
+	Log hold = L_DELAYED(true, std::chrono::seconds(30), LOG_WARNING, "held");
 
 	constexpr int kThreads = 4;
 	for (int t = 0; t < kThreads; ++t) {
@@ -65,6 +69,7 @@ int main() {
 		});
 		th.join();
 	}
+	hold.clear();
 	CHECK(Logging::finish());
 
 	std::lock_guard<std::mutex> lk(cap->mtx);
