@@ -3,10 +3,17 @@
 The LOG thread writes lines while the process exits. A process that returns from `main` without
 `Logging::finish()` stops it from a static's destructor, the *stop* (`Finisher` in
 `LogWorker::get()`), which ends the LOG thread with one pass and joins it while it writes lines.
-It abandons the LOG thread, waits until it parks, and reports on stderr how many lines were not
-written, after 200 ms without a line (`kExitStall`, a stalled handler) or 5 s in all (`kExitCap`).
-The cap keeps exit under the shortest grace a supervisor gives before SIGKILL, with room to spare:
-`docker stop` kills 10 s after SIGTERM, Kubernetes 30 s by default. Until the stop returns, the
+It abandons the LOG thread, waits until it parks, and reports on stderr at most how many lines due
+by then were not written, after 200 ms without a line (`kExitStall`, a stalled handler) or 5 s of
+draining in all (`kExitCap`). The count leaves out deferred lines not yet due, which no exit
+writes; it is a bound, since a producer racing the stop may still write its own line. The cap
+bounds the drain so exit ends under the shortest grace a supervisor gives before SIGKILL, with room
+to spare: `docker stop` kills 10 s after SIGTERM, Kubernetes 30 s by default. One case is not
+bounded: a handler blocked forever in a write. Abandoning waits for the line in progress, so exit
+waits as long as that write does. The stop is skipped in a fork child (the process differs from the
+one the LOG thread runs in, so there is no LOG thread to wait for) and when `exit()` runs on the LOG
+thread itself (from a handler or a deferred task), which cannot wait for itself; what is queued is
+not written then. Until the stop returns, the
 LOG thread drains the queues and calls `Logging::emit`; a line refused after the stop began is
 written by `Logging::emit` on the thread that logged it, which may be a static's destructor
 anywhere in the process.
@@ -30,8 +37,9 @@ The host's statics, `Logging::config`, `Logging::hooks` and `Logging::handlers`,
 destructors (a handler flushes and closes its sink at exit; `test/exit.cc`'s `child` holds that).
 Their owner fences them instead: `Teardown`, defined right after them in logger.cc and so destroyed
 just before them, sets `torn_down`. `Logging::emit` and `Logging::log` load it first (one relaxed
-load); once it is set, a line is written to stderr as its text alone, and none of the three is
-touched. Only a line logged by a static destroyed after logger.cc's statics gets there: the LOG
+load), and so does the description of a line's exception, made when the line is logged; once it is
+set, a line is written to stderr as its text alone (with its exception's description, made by the
+std default instead of the host's hook), and none of the three is touched. Only a line logged by a static destroyed after logger.cc's statics gets there: the LOG
 thread was stopped earlier. The macros still read `config.log_level` and `config.max_pending`
 there, integers in static storage that is never freed.
 
@@ -47,7 +55,8 @@ test aborted 20 of 20 at exit under LLVM 22 (Xapiand campaign job 261118-163254-
 `test/exit.cc` (`logger_exit_test once`, ctest `logger_exit_once`) queues `once` lines as `main`
 returns, and checks each distinct line is written once, by a handler whose destructor runs after the
 stop. `logger_exit_test late` (ctest `logger_exit_late`) logs a routine and a severe line from a
-static destroyed after logger.cc's statics and checks both reach stderr; without the fence, libc++'s
+static destroyed after logger.cc's statics, and an `L_EXC` line with a heap-held describe hook,
+and checks all reach stderr; without the fence, libc++'s
 destroyed (and emptied) handler vector drops them, and libstdc++'s reads freed memory.
 
 ## Every static on the path

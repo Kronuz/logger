@@ -122,8 +122,9 @@ queued line is written, deferred lines due by then are written, and the rest are
 released. A producer that published just then sees the LOG thread closed and
 writes its line itself, unless the last look got it. At exit, if `finish()` was
 never called, a static's destructor does the same with one pass and joins the LOG thread while it
-writes lines: it gives up after 200 ms without one (a handler is stalled) or 5 s in all (under
-`docker stop`'s 10 s grace before SIGKILL), and reports the lines left on stderr. Then the handlers and config are about to be destroyed, so the destructor sets
+writes lines: it gives up after 200 ms without one (a handler is stalled) or 5 s of draining (under
+`docker stop`'s 10 s grace before SIGKILL), and reports on stderr at most how many due lines it left.
+It is skipped in a fork child and when `exit()` runs on the LOG thread. Then the handlers and config are about to be destroyed, so the destructor sets
 `abandoned`: the LOG thread finishes the line it is in, writes nothing more (what is queued is lost,
 as at any timed-out join) and parks, and the destructor waits for that before returning.
 

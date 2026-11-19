@@ -962,6 +962,8 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 	std::atomic<bool> final_done{false};     // the last look at the queues is over
 	std::atomic<bool> abandoned{false};      // the exit-time drain stalled: write nothing more
 	std::atomic<std::uint64_t> taken_{0};    // lines a pass took, for the exit-time stop to see progress
+	const pid_t pid_ = ::getpid();           // the process the LOG thread runs in (not a fork child)
+	std::atomic<std::thread::id> tid_{};     // the LOG thread, once it runs
 	std::atomic<bool> parked{false};         // the LOG thread has seen `abandoned` and writes nothing
 	// LOG thread only: deferred lines filed in a wheel by due time; a pass takes the due ones into
 	// `batch`, sorted by (due, call time, filing order), and merges it with the queues' lines.
@@ -1244,6 +1246,10 @@ public:
 		static struct Finisher {
 			~Finisher() {
 				using std::chrono::steady_clock;
+				// A fork child has no LOG thread to wait for, and exit() on the LOG thread cannot wait for it.
+				if (::getpid() != worker->pid_ || std::this_thread::get_id() == worker->tid_.load(std::memory_order_acquire)) {
+					return;
+				}
 				worker->end(1);
 				// Waits while the drain writes, up to kExitCap in all; kExitStall without a line is a
 				// stalled handler.
@@ -1379,6 +1385,7 @@ public:
 	// The LOG thread's loop.
 	void operator()() {
 		using namespace std::chrono;
+		tid_.store(std::this_thread::get_id(), std::memory_order_release);
 		for (;;) {
 			if (abandoned.load(std::memory_order_acquire)) {
 				break;
