@@ -13,9 +13,15 @@
 // counts what it is given; its destructor, which runs after the stop, checks every distinct line
 // was written once (status 98 otherwise), and a crash or an abort fails the run.
 //
+// `child-late`: a static of this file, destroyed after logger.cc's statics (this file is linked
+// first, so its statics are made first; the child exits 97 if the order differs), logs a routine
+// and a severe line as it is destroyed. Both must reach stderr as they are, after the handler
+// (which prefixes its lines with "sink: ") is gone.
+//
 // Usage: logger_exit_test          the parent: runs `child` three times
 //        logger_exit_test once     the parent: runs `child-once` three times
-//        logger_exit_test child | child-once    (internal) a child
+//        logger_exit_test late     the parent: runs `child-late` three times, checking its stderr
+//        logger_exit_test child | child-once | child-late    (internal) a child
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -88,6 +94,67 @@ static int child_once() {
 	return 0;
 }
 
+// child-late: a handler that marks its lines and its destruction, and a static that logs after it.
+class MarkingLogger : public Logger {
+public:
+	void log(int, std::string_view str, bool, bool) override {
+		if (destroyed.load()) {
+			_exit(99);
+		}
+		std::string s = "sink: ";
+		s += str;
+		s += '\n';
+		CHECK(::write(STDERR_FILENO, s.data(), s.size()) == static_cast<ssize_t>(s.size()));
+		calls.fetch_add(1);
+	}
+	~MarkingLogger() noexcept override {
+		destroyed.store(true);
+	}
+};
+
+struct LateLogger {
+	bool armed = false;
+	~LateLogger() {
+		if (!armed) {
+			return;
+		}
+		if (!destroyed.load()) {
+			std::fprintf(stderr, "child-late: this static is destroyed before the handlers; nothing tested\n");
+			_exit(97);
+		}
+		L_WARNING("late line from a static destructor");
+		L_CRIT("late severe line from a static destructor");
+	}
+};
+static LateLogger late;
+
+static int child_late() {
+	Logging::handlers.clear();
+	Logging::add_handler(std::make_unique<MarkingLogger>());
+	Logging::config.color = LogColorMode::never;
+	Logging::config.log_level = LOG_INFO;
+	Logging::config.iterm2 = false;
+	L_INFO("first line");   // starts the LOG thread and registers its exit-time stop
+	for (int k = 0; k < 2000 && calls.load() < 1; ++k) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	CHECK(calls.load() == 1);
+	late.armed = true;
+	return 0;
+}
+
+static std::string read_file(const char* path) {
+	std::string out;
+	if (std::FILE* f = std::fopen(path, "rb")) {
+		char b[4096];
+		for (std::size_t n; (n = std::fread(b, 1, sizeof b, f)) > 0;) {
+			out.append(b, n);
+		}
+		std::fclose(f);
+	}
+	return out;
+}
+
 static int child() {
 	Logging::handlers.clear();
 	Logging::add_handler(std::make_unique<SlowLogger>());
@@ -106,6 +173,31 @@ int main(int argc, char** argv) {
 	}
 	if (argc == 2 && std::strcmp(argv[1], "child-once") == 0) {
 		return child_once();
+	}
+	if (argc == 2 && std::strcmp(argv[1], "child-late") == 0) {
+		return child_late();
+	}
+	if (argc == 2 && std::strcmp(argv[1], "late") == 0) {
+		const char* err = "logger_exit_late.err";
+		for (int round = 0; round < 3; ++round) {
+			std::string cmd = std::string("\"") + argv[0] + "\" child-late 2>" + err;
+			int st = std::system(cmd.c_str());
+			const std::string text = read_file(err);
+			if (st != 0) {
+				std::fprintf(stderr, "round %d: the child's status is %d; its stderr:\n%s", round, st, text.c_str());
+			}
+			CHECK(st == 0);
+			CHECK(text.find("sink: ") != std::string::npos && text.find("first line\n") != std::string::npos);
+			const bool routine = text.find("\nlate line from a static destructor\n") != std::string::npos;
+			const bool severe = text.find("\nlate severe line from a static destructor\n") != std::string::npos;
+			if (!routine || !severe) {
+				std::fprintf(stderr, "round %d: a late line is missing from the child's stderr:\n%s", round, text.c_str());
+			}
+			CHECK(routine && severe);
+		}
+		std::remove(err);
+		std::printf("exit with a static logging after the teardown OK: its lines reach stderr as they are\n");
+		return 0;
 	}
 	const bool once = argc == 2 && std::strcmp(argv[1], "once") == 0;
 	// Freed memory is filled, so a destroyed static the LOG thread reads is garbage, not its old bytes.

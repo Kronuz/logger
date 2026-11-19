@@ -122,6 +122,8 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_test(NAME logger_exit COMMAND logger_exit_test)
   # Exit with `once` lines queued: the once filter, made after the exit-time stop, is destroyed first.
   add_test(NAME logger_exit_once COMMAND logger_exit_test once)
+  # A static destroyed after config, hooks and handlers logs: its lines go to stderr as they are.
+  add_test(NAME logger_exit_late COMMAND logger_exit_test late)
 
   # One scripted run must write the golden bytes (test/transcript.golden), which the implementation
   # before the producer path changed wrote: the path may change, never what is written.
