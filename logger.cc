@@ -1837,9 +1837,17 @@ Logging::operator()()
 void
 Logging::emit(const logger_detail::Emit& line)
 {
-	// After the teardown (a static destroyed after config, hooks and handlers logs): the text alone.
+	// After the teardown (a static destroyed after config, hooks and handlers logs): the text alone,
+	// with the exception's description the line owns.
 	if (torn_down.load(std::memory_order_relaxed)) {
-		write_raw(line.str, true);
+		if (line.exc != nullptr) {
+			std::string text(line.str);
+			text += line.str.empty() ? "" : ": ";
+			text += *line.exc;
+			write_raw(text, true);
+		} else {
+			write_raw(line.str, true);
+		}
 		return;
 	}
 
