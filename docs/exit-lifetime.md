@@ -23,6 +23,15 @@ runs. So everything the logger owns that `Logging::emit` or the drain reaches is
 Reordering definitions does not meet the rule: the order a function-local static is made in
 depends on which line comes first.
 
+The host's statics, `Logging::config`, `Logging::hooks` and `Logging::handlers`, keep their
+destructors (a handler flushes and closes its sink at exit; `test/exit.cc`'s `child` holds that).
+Their owner fences them instead: `Teardown`, defined right after them in logger.cc and so destroyed
+just before them, sets `torn_down`. `Logging::emit` and `Logging::log` load it first (one relaxed
+load); once it is set, a line is written to stderr as its text alone, and none of the three is
+touched. Only a line logged by a static destroyed after logger.cc's statics gets there: the LOG
+thread was stopped earlier. The macros still read `config.log_level` and `config.max_pending`
+there, integers in static storage that is never freed.
+
 ## The defect this fixes
 
 `Logging::emit` deduplicated `once` lines through a function-local `static OnceFilter filter`, made
@@ -34,7 +43,9 @@ test aborted 20 of 20 at exit under LLVM 22 (Xapiand campaign job 261118-163254-
 
 `test/exit.cc` (`logger_exit_test once`, ctest `logger_exit_once`) queues `once` lines as `main`
 returns, and checks each distinct line is written once, by a handler whose destructor runs after the
-stop.
+stop. `logger_exit_test late` (ctest `logger_exit_late`) logs a routine and a severe line from a
+static destroyed after logger.cc's statics and checks both reach stderr; without the fence, libc++'s
+destroyed (and emptied) handler vector drops them, and libstdc++'s reads freed memory.
 
 ## Every static on the path
 
@@ -60,7 +71,8 @@ inline write reaches.
 | `worker` in `LogWorker::get()` | function-local | the LOG thread's object is never deleted |
 | `finisher` in `LogWorker::get()` | function-local | the stop itself |
 | `n` in `LogWorker::name()` | function-local | read once, when the LOG thread starts; never at exit |
-| `Logging::config`, `Logging::hooks`, `Logging::handlers` | static members, the host's | made before the stop (namespace scope in logger.cc), destroyed after it: the LOG thread has stopped or parked when they go. A line logged inline by a static destroyed after them is the host's to avoid (`Logging::finish()` before the statics tear down) |
+| `Logging::config`, `Logging::hooks`, `Logging::handlers` | static members, the host's | made before the stop (namespace scope in logger.cc), destroyed after it: the LOG thread has stopped or parked when they go. `torn_down` is set before they are destroyed, and a line written after it touches none of them |
+| `torn_down`, `teardown` | namespace scope | the fence: an atomic (trivially destructible) and the object whose destructor sets it |
 | `seq`, `mine` in `wheel::timer_wheel::stripe()` | Kronuz/wheel | atomic and integer: trivially destructible |
 
 term-color's `apply` and `collapse` keep no statics.
@@ -74,7 +86,5 @@ term-color's `apply` and `collapse` keep no statics.
   host's `WORKPOOL_THREAD_UNREGISTER`) while the statics are destroyed.
 - A line queued before logger.cc's statics are initialized (from another file's static initializer)
   makes the stop before `config`, `hooks` and `handlers`, so they are destroyed before it.
-- Keeping `config`, `hooks` and `handlers` alive for good (references to `Immortal` storage, the
-  same expressions in the host) would cover inline lines logged after their destruction too, at
-  the cost of the handlers' destructors no longer running at exit; that is a behavior change, left
-  open.
+- A thread other than the one running the statics' destructors that writes a line while they run
+  can load `torn_down` just before it is set: what any process exit leaves to a thread still logging.

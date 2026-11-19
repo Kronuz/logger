@@ -127,7 +127,9 @@ for that before returning.
 That static is made at the first queued line, so what the logger makes after it is destroyed while
 the LOG thread still runs. Everything the logger owns that a written line or the drain reaches has
 no destructor (`constexpr`, or trivially destructible) or is never destroyed (`Immortal<T>`, such as
-the `once` filter); `docs/exit-lifetime.md` lists each one.
+the `once` filter). The host's `config`, `hooks` and `handlers` keep their destructors; just before
+they run, `torn_down` is set, and a line written after it goes to stderr as its text alone.
+`docs/exit-lifetime.md` lists each static.
 
 ## Deferred lines ride the LOG thread's wheel
 

@@ -74,6 +74,16 @@ std::vector<std::unique_ptr<Logger>> Logging::handlers;
 Logging::Counter Logging::completed_;
 Logging::Counter Logging::dropped_;
 
+namespace {
+// Set at exit just before config, hooks and handlers are destroyed: `Teardown` is defined after them
+// in this file, so it is destroyed first. A line written after that goes to stderr as it is and
+// touches none of them.
+std::atomic<bool> torn_down{false};
+struct Teardown {
+	~Teardown() { torn_down.store(true, std::memory_order_relaxed); }
+} teardown;
+}  // namespace
+
 
 namespace {
 // Frees the thread's message buffers when the thread ends; a log call made after that (from
@@ -359,6 +369,18 @@ write_all(int fd, const char* data, size_t size)
 		data += n;
 		size -= static_cast<size_t>(n);
 	}
+}
+
+
+// A line written after the teardown: its text alone, to stderr.
+static void
+write_raw(std::string_view str, bool with_endl)
+{
+	std::string buf(str);
+	if (with_endl) {
+		buf += '\n';
+	}
+	write_all(STDERR_FILENO, buf.data(), buf.size());
 }
 
 
@@ -1577,6 +1599,10 @@ Logging::pending_count() noexcept
 void
 Logging::log(int priority, std::string str, bool with_priority, bool with_endl)
 {
+	if (torn_down.load(std::memory_order_relaxed)) {
+		write_raw(str, with_endl);
+		return;
+	}
 	priority = validated_priority(priority);
 	for (auto& handler : handlers) {
 		handler->log(priority, str, with_priority, with_endl);
@@ -1766,6 +1792,12 @@ Logging::operator()()
 void
 Logging::emit(const logger_detail::Emit& line)
 {
+	// After the teardown (a static destroyed after config, hooks and handlers logs): the text alone.
+	if (torn_down.load(std::memory_order_relaxed)) {
+		write_raw(line.str, true);
+		return;
+	}
+
 	// Report any lines dropped under backpressure since the last line written.
 	if (dropped_.n.load(std::memory_order_relaxed) != 0) {
 		if (auto d = dropped_.n.exchange(0, std::memory_order_relaxed); d > 0) {
