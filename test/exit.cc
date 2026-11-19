@@ -31,6 +31,11 @@
 // `child-fork`: a fork child of a process whose LOG thread runs logs a line and returns from main.
 // It has no LOG thread, so its exit must not wait for one; the parent kills it after 8 s.
 //
+// `child-fork-held`: the same fork while the LOG thread holds its mutex, about to sleep (forced with
+// `logger_detail::sleep_hook`). The fork child logs a line and calls finish(), each of which locks that
+// mutex, and must exit within 5 s; the parent then writes every line it logs. test/fork_mutant.sh
+// removes the child's reset and requires this to fail.
+//
 // `child-logexit`: a handler calls exit() on the LOG thread. The exit-time stop must not wait for
 // the thread it runs on.
 //
@@ -39,10 +44,10 @@
 //        logger_exit_test late     the parent: runs `child-late` three times, checking its stderr
 //        logger_exit_test slow     the parent: runs `child-slow` three times
 //        logger_exit_test capped   the parent: runs `child-capped` once, checking its stderr
-//        logger_exit_test fork     the parent: runs `child-fork` once, within 10 s
+//        logger_exit_test fork     the parent: runs `child-fork` and `child-fork-held` once, within 10 s each
 //        logger_exit_test logexit  the parent: runs `child-logexit` once, within 10 s
 //        logger_exit_test child | child-once | child-late | child-slow | child-capped | child-fork |
-//                         child-logexit    (internal) a child
+//                         child-fork-held | child-logexit    (internal) a child
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -306,6 +311,108 @@ static int child_fork() {
 	return 0;
 }
 
+// child-fork-held: counts the lines written, and those logged after the fork.
+static std::atomic<long> fork_written{0};
+static std::atomic<long> fork_after{0};
+
+class ForkCounter : public Logger {
+public:
+	void log(int, std::string_view str, bool, bool) override {
+		fork_written.fetch_add(1);
+		if (str.find("after the fork") != std::string_view::npos) {
+			fork_after.fetch_add(1);
+		}
+	}
+};
+
+static std::atomic<bool> held{false};     // the LOG thread is in the hook, holding its mutex
+static std::atomic<bool> forked{false};   // the parent forked: the hook may return
+
+// Runs once, on the LOG thread, holding its mutex with kSleeping set, until the fork.
+static void hold_at_fork() {
+	logger_detail::sleep_hook.store(nullptr);
+	held.store(true);
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+	while (!forked.load()) {
+		CHECK(std::chrono::steady_clock::now() < deadline);
+		std::this_thread::yield();
+	}
+}
+
+static bool wait_count(const std::atomic<long>& n, long want) {
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (n.load() < want) {
+		if (std::chrono::steady_clock::now() > deadline) {
+			return false;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	return true;
+}
+
+static int child_fork_held() {
+	Logging::handlers.clear();
+	Logging::add_handler(std::make_unique<ForkCounter>());
+	Logging::config.color = LogColorMode::never;
+	Logging::config.log_level = LOG_INFO;
+	Logging::config.iterm2 = false;
+	L_INFO("before the fork");   // starts the LOG thread, which registers the fork reset
+	CHECK(wait_count(fork_written, 1));
+
+	// The hook fires at the LOG thread's next sleep. Another thread logs until it has, so the thread
+	// that forks never waits on the held mutex itself.
+	logger_detail::sleep_hook.store(&hold_at_fork);
+	std::atomic<long> nudges{0};
+	std::thread nudger([&] {
+		while (!held.load()) {
+			const long k = nudges.load();
+			L_INFO("nudge {}", k);
+			nudges.store(k + 1);
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+	});
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (!held.load()) {
+		CHECK(std::chrono::steady_clock::now() < deadline);
+		std::this_thread::yield();
+	}
+
+	const pid_t pid = fork();
+	CHECK(pid >= 0);
+	if (pid == 0) {
+		// The child's one thread: a line that wakes the LOG thread it does not have, then finish(), which
+		// signals it too. Without the reset either waits forever on the mutex the parent's LOG thread held.
+		L_INFO("in the fork child");
+		Logging::finish(0);
+		_exit(0);   // `nudger` is a joinable std::thread here, which a return would terminate on
+	}
+	forked.store(true);
+	nudger.join();
+
+	int st = 0;
+	const auto child_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (waitpid(pid, &st, WNOHANG) == 0) {
+		if (std::chrono::steady_clock::now() > child_deadline) {
+			kill(pid, SIGKILL);
+			waitpid(pid, &st, 0);
+			std::fprintf(stderr, "child-fork-held: the fork child blocked on the LOG thread's mutex (killed after 5 s)\n");
+			_exit(1);
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+
+	// The parent's logger is unaffected: every line before and after the fork is written.
+	for (int k = 0; k < 100; ++k) {
+		L_INFO("after the fork {}", k);
+	}
+	CHECK(wait_count(fork_after, 100));
+	CHECK(Logging::finish(1));
+	CHECK(fork_written.load() == 1 + nudges.load() + 100);
+	CHECK(logger_detail::pending_count() == 0);
+	return 0;
+}
+
 // child-logexit: a handler that calls exit() on the LOG thread.
 class ExitingLogger : public Logger {
 public:
@@ -391,17 +498,23 @@ int main(int argc, char** argv) {
 	if (argc == 2 && std::strcmp(argv[1], "child-fork") == 0) {
 		return child_fork();
 	}
+	if (argc == 2 && std::strcmp(argv[1], "child-fork-held") == 0) {
+		return child_fork_held();
+	}
 	if (argc == 2 && std::strcmp(argv[1], "child-logexit") == 0) {
 		return child_logexit();
 	}
 	if (argc == 2 && (std::strcmp(argv[1], "fork") == 0 || std::strcmp(argv[1], "logexit") == 0)) {
 		const bool fork_mode = std::strcmp(argv[1], "fork") == 0;
-		const int st = run_bounded(argv[0], fork_mode ? "child-fork" : "child-logexit", 10);
-		if (st != 0) {
-			std::fprintf(stderr, "the child's status is %d%s\n", st, st == -1 ? " (hung at exit, killed after 10 s)" : "");
+		const auto modes = fork_mode ? std::vector<const char*>{"child-fork", "child-fork-held"} : std::vector<const char*>{"child-logexit"};
+		for (const char* mode : modes) {
+			const int st = run_bounded(argv[0], mode, 10);
+			if (st != 0) {
+				std::fprintf(stderr, "%s: the child's status is %d%s\n", mode, st, st == -1 ? " (hung, killed after 10 s)" : "");
+			}
+			CHECK(st == 0);
 		}
-		CHECK(st == 0);
-		std::printf(fork_mode ? "exit in a fork child OK: it does not wait for a LOG thread it does not have\n"
+		std::printf(fork_mode ? "exit in a fork child OK: it does not wait for a LOG thread it does not have, nor on its mutex\n"
 			: "exit on the LOG thread OK: the stop does not wait for its own thread\n");
 		return 0;
 	}

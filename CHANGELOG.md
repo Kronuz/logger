@@ -5,6 +5,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Upgrading a pin from before 2026-10-30: [the consumer upgrade note](https://github.com/Kronuz/cpp-libraries/blob/main/docs/UPGRADING-2026-10.md#logger) lists what changes for callers, how to find affected inputs, the commits not to pin, and the speedup.
 
+## 2026-11-19 (a fork child's logger)
+
+### Fixed
+
+- A fork child no longer blocks when it logs or calls `finish()` if the parent's LOG thread held its
+  mutex at the fork. The LOG thread registers a `pthread_atfork` child handler that constructs its
+  mutex and condition variable anew in the child; it calls no libc function. The child's lines are
+  still queued and not written, as before (`docs/fork.md`). `test/exit.cc`'s `child-fork-held`
+  forces the fork while the mutex is held, and `test/fork_mutant.sh` requires it to fail without
+  the handler.
+
 ## 2026-11-16 (a producer's burst cost)
 
 ### Fixed
