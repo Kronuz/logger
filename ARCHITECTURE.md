@@ -48,6 +48,9 @@ L_DELAYED(100ms, ...)      --> a Logging record; the thread's queue    ---/   (d
    on a shared log lock. A line that carries an exception, or is logged through
    `do_log`, is a `Logging` record instead, referenced from the same queue and
    written in the same order.
+   The exception is described on the calling thread as the record is made
+   (`describe_exception`), so the record holds the text and the LOG thread never
+   touches the exception object.
 
 3. **Deferred, future.** A `Logging` record due at `now + delay`, referenced from
    the thread's queue; the LOG thread files it in its timer wheel and fires it

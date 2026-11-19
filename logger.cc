@@ -669,6 +669,21 @@ static std::string hooked_backtrace() {
 	return Logging::hooks.backtrace ? Logging::hooks.backtrace() : std::string();
 }
 
+// A line's exception, described on the thread that logs it: the line owns the text, and the LOG
+// thread never touches the exception, which its thread may destroy meanwhile.
+static std::optional<std::string>
+describe_at_call(const std::exception_ptr& e)
+{
+	if (!e) {
+		return std::nullopt;
+	}
+	try {
+		return hooked_describe_exception(e);
+	} catch (...) {
+		return std::string("unknown exception");
+	}
+}
+
 // Compact age annotation for a slow async/deferred line.
 static std::string
 format_delta(std::chrono::nanoseconds ns)
@@ -751,7 +766,7 @@ struct Emit {
 	bool async;
 	std::uint64_t once;
 	std::string_view str;
-	const std::exception_ptr* eptr;   // null: no exception
+	const std::string* exc;           // the exception's description; null: no exception
 	std::thread::id thread_id;
 	std::source_location loc;
 	int indent;
@@ -1514,7 +1529,7 @@ Logging::Logging(std::string&& str_, bool clears_, bool async_, bool info_, uint
 	  info(info_),
 	  atom_cancelled(false),
 	  once(once_),
-	  eptr(std::move(eptr_)),
+	  exc(describe_at_call(eptr_)),
 	  thread_id(std::this_thread::get_id()),
 	  loc(loc_),
 	  indent(logger_detail::thread_state.indent),
@@ -1741,7 +1756,7 @@ Logging::add_line(std::chrono::steady_clock::time_point wakeup, Msg&& str, bool 
 			loc, created_at, timestamp);
 	}
 	if (eptr != nullptr) {
-		entry->eptr = std::move(*eptr);
+		entry->exc = describe_at_call(*eptr);
 	}
 
 	if (will_schedule) {
@@ -1783,7 +1798,7 @@ Logging::add_line(std::chrono::steady_clock::time_point wakeup, Msg&& str, bool 
 void
 Logging::operator()()
 {
-	logger_detail::Emit line{priority, info, async, once, str, eptr ? &eptr : nullptr, thread_id, loc, indent,
+	logger_detail::Emit line{priority, info, async, once, str, exc ? &*exc : nullptr, thread_id, loc, indent,
 		timestamp, async ? age() : std::chrono::nanoseconds(0)};
 	emit(line);
 }
@@ -1848,11 +1863,11 @@ Logging::emit(const logger_detail::Emit& line)
 	if (config.tint && line.priority >= 0 && line.priority < MAX_LOG_PRIORITY) { msg += tints[line.priority]; }
 	msg += line.str;
 
-	if (line.eptr != nullptr && *line.eptr) {
+	if (line.exc != nullptr) {
 		if (!line.str.empty()) {
 			msg += ": ";
 		}
-		msg += hooked_describe_exception(*line.eptr);
+		msg += *line.exc;
 		auto bt = hooked_backtrace();
 		if (!bt.empty()) {
 			msg += '\n';

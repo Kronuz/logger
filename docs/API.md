@@ -17,7 +17,9 @@ async lines are dropped past it with a coalesced summary).
 
 Optional, each with a std default: `describe_exception`, `backtrace`,
 `thread_name`, `timestamp`. A host injects richer versions (e.g. real backtraces,
-named threads) without the core depending on them.
+named threads) without the core depending on them. `describe_exception` runs on the
+thread that logs the line, when it is logged: the line keeps the text, never the
+exception, which its thread may destroy before the LOG thread writes the line.
 
 ## Sinks (`Logger`)
 

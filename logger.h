@@ -31,6 +31,7 @@
 #include <cstdint>       // for uint64_t, INT16_MIN, UINT32_MAX
 #include <new>           // for placement new
 #include <exception>     // for std::exception_ptr
+#include <optional>      // for std::optional
 #include <format>        // for std::vformat, std::make_format_args
 #include <functional>    // for std::function
 #include <iterator>      // for std::back_inserter
@@ -122,7 +123,7 @@ struct LogConfig {
 // Pluggable formatting, all optional. A host (e.g. Xapiand) injects richer
 // versions of these; left empty, the core uses std-only defaults.
 struct LogHooks {
-	std::function<std::string(std::exception_ptr)> describe_exception;            // default: std::exception::what()
+	std::function<std::string(std::exception_ptr)> describe_exception;            // default: std::exception::what(); runs when the line is logged
 	std::function<std::string()> backtrace;                                       // default: empty
 	std::function<std::string(std::thread::id)> thread_name;                      // default: the thread id
 	std::function<std::string(std::chrono::system_clock::time_point)> timestamp;  // default: "YYYY-MM-DD HH:MM:SS.mmm"
@@ -586,7 +587,7 @@ class Logging : private wheel::timer_entry {
 	bool info;          // decorate with timestamp / thread / location
 	std::atomic_bool atom_cancelled;   // set by a user clear(); a cancelled record is never written
 	uint64_t once;      // dedup token; 0 = no dedup
-	std::exception_ptr eptr;
+	std::optional<std::string> exc;   // the exception's description, made when the line is logged
 	std::thread::id thread_id;
 	std::source_location loc;   // call site (file / line / function), C++20
 	int indent;         // stacked-indent depth, captured at creation (thread-local)
