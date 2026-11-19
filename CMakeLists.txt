@@ -125,6 +125,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   # A static destroyed after config, hooks and handlers logs: its lines go to stderr as they are.
   add_test(NAME logger_exit_late COMMAND logger_exit_test late)
 
+  # An exception logged on one thread and destroyed by it after the LOG thread wrote the line:
+  # the line carries the description made at the call (TSan flags a LOG thread that touches it).
+  add_executable(logger_exception_test test/exception.cc)
+  target_link_libraries(logger_exception_test PRIVATE logger)
+  add_test(NAME logger_exception COMMAND logger_exception_test)
+
   # One scripted run must write the golden bytes (test/transcript.golden), which the implementation
   # before the producer path changed wrote: the path may change, never what is written.
   add_executable(logger_transcript test/transcript.cc)
