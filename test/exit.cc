@@ -11,9 +11,9 @@
 // lines are written.
 //
 // `child-capped`: the drain is steady but too long: 200 lines at 50 ms each, 10 s against the stop's
-// 5 s cap. The stop cuts it and reports on stderr at most how many lines it did not write; with one
-// producer and no deferred lines the bound is exact, so the parent checks that count and the
-// handler's own add up to 200, and that some were cut.
+// 5 s cap. The stop cuts it and reports on stderr at most how many lines due by then it did not
+// write; 5 deferred lines due in an hour are left out. With one producer the bound is exact, so the
+// parent checks that count and the handler's own add up to 200, and that some were cut.
 //
 // `child-once`: `once` lines are still queued when main returns. The once filter is made by the
 // first `once` line, after the exit-time stop is registered, so the statics' destruction reaches it
@@ -58,6 +58,7 @@
 #include <string>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 
 #include "logger.h"
 
@@ -179,6 +180,10 @@ static int child_capped() {
 	Logging::config.color = LogColorMode::never;
 	Logging::config.log_level = LOG_INFO;
 	Logging::config.iterm2 = false;
+	auto* keep = new std::vector<Log>;   // never destroyed: the deferred lines stay filed
+	for (int k = 0; k < 5; ++k) {
+		keep->push_back(L_DELAYED(false, std::chrono::hours(1), LOG_WARNING, "deferred line {}", k));
+	}
 	for (int k = 0; k < kCappedLines; ++k) {
 		L_INFO("capped line {}", k);
 	}
