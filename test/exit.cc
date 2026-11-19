@@ -27,17 +27,29 @@
 // description, made without the host's describe hook, which is destroyed with `Logging::hooks` (it
 // is heap-held, flags its destruction, and exits 95 if called after it).
 //
+// `child-fork`: a fork child of a process whose LOG thread runs logs a line and returns from main.
+// It has no LOG thread, so its exit must not wait for one; the parent kills it after 8 s.
+//
+// `child-logexit`: a handler calls exit() on the LOG thread. The exit-time stop must not wait for
+// the thread it runs on.
+//
 // Usage: logger_exit_test          the parent: runs `child` three times
 //        logger_exit_test once     the parent: runs `child-once` three times
 //        logger_exit_test late     the parent: runs `child-late` three times, checking its stderr
 //        logger_exit_test slow     the parent: runs `child-slow` three times
 //        logger_exit_test capped   the parent: runs `child-capped` once, checking its stderr
-//        logger_exit_test child | child-once | child-late | child-slow | child-capped    (internal)
+//        logger_exit_test fork     the parent: runs `child-fork` once, within 10 s
+//        logger_exit_test logexit  the parent: runs `child-logexit` once, within 10 s
+//        logger_exit_test child | child-once | child-late | child-slow | child-capped | child-fork |
+//                         child-logexit    (internal) a child
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <csignal>
+#include <fcntl.h>
+#include <sys/wait.h>
 #include <array>
 #include <exception>
 #include <memory>
@@ -251,6 +263,81 @@ static int child_late() {
 	return 0;
 }
 
+// child-fork: the grandchild returns from main with the logger's exit-time stop inherited.
+static int child_fork() {
+	Logging::handlers.clear();
+	Logging::add_handler(std::make_unique<MarkingLogger>());
+	Logging::config.color = LogColorMode::never;
+	Logging::config.log_level = LOG_INFO;
+	Logging::config.iterm2 = false;
+	L_INFO("before fork");   // starts the LOG thread and registers its exit-time stop
+	for (int k = 0; k < 2000 && calls.load() < 1; ++k) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	CHECK(calls.load() == 1);
+	const pid_t pid = fork();
+	CHECK(pid >= 0);
+	if (pid == 0) {
+		L_INFO("in the fork child");
+		return 0;
+	}
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+	int st = 0;
+	while (waitpid(pid, &st, WNOHANG) == 0) {
+		if (std::chrono::steady_clock::now() > deadline) {
+			kill(pid, SIGKILL);
+			waitpid(pid, &st, 0);
+			std::fprintf(stderr, "child-fork: the fork child hung at exit\n");
+			_exit(1);
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+	return 0;
+}
+
+// child-logexit: a handler that calls exit() on the LOG thread.
+class ExitingLogger : public Logger {
+public:
+	void log(int, std::string_view str, bool, bool) override {
+		if (str.find("bye") != std::string_view::npos) {
+			std::exit(0);
+		}
+	}
+};
+
+static int child_logexit() {
+	Logging::handlers.clear();
+	Logging::add_handler(std::make_unique<ExitingLogger>());
+	Logging::config.color = LogColorMode::never;
+	Logging::config.log_level = LOG_INFO;
+	Logging::config.iterm2 = false;
+	L_INFO("bye");
+	std::this_thread::sleep_for(std::chrono::seconds(30));
+	return 3;   // the handler's exit() never came
+}
+
+// Runs `self mode`; kills it after `seconds`. Its wait status, or -1 if it was killed.
+static int run_bounded(const char* self, const char* mode, int seconds) {
+	const pid_t pid = fork();
+	CHECK(pid >= 0);
+	if (pid == 0) {
+		execl(self, self, mode, static_cast<char*>(nullptr));
+		_exit(127);
+	}
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+	int st = 0;
+	while (waitpid(pid, &st, WNOHANG) == 0) {
+		if (std::chrono::steady_clock::now() > deadline) {
+			kill(pid, SIGKILL);
+			waitpid(pid, &st, 0);
+			return -1;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	return st;
+}
+
 static std::string read_file(const char* path) {
 	std::string out;
 	if (std::FILE* f = std::fopen(path, "rb")) {
@@ -290,6 +377,23 @@ int main(int argc, char** argv) {
 	}
 	if (argc == 2 && std::strcmp(argv[1], "child-capped") == 0) {
 		return child_capped();
+	}
+	if (argc == 2 && std::strcmp(argv[1], "child-fork") == 0) {
+		return child_fork();
+	}
+	if (argc == 2 && std::strcmp(argv[1], "child-logexit") == 0) {
+		return child_logexit();
+	}
+	if (argc == 2 && (std::strcmp(argv[1], "fork") == 0 || std::strcmp(argv[1], "logexit") == 0)) {
+		const bool fork_mode = std::strcmp(argv[1], "fork") == 0;
+		const int st = run_bounded(argv[0], fork_mode ? "child-fork" : "child-logexit", 10);
+		if (st != 0) {
+			std::fprintf(stderr, "the child's status is %d%s\n", st, st == -1 ? " (hung at exit, killed after 10 s)" : "");
+		}
+		CHECK(st == 0);
+		std::printf(fork_mode ? "exit in a fork child OK: it does not wait for a LOG thread it does not have\n"
+			: "exit on the LOG thread OK: the stop does not wait for its own thread\n");
+		return 0;
 	}
 	if (argc == 2 && std::strcmp(argv[1], "capped") == 0) {
 		const char* err = "logger_exit_capped.err";

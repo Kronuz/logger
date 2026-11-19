@@ -128,6 +128,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_test(NAME logger_exit_slow COMMAND logger_exit_test slow)
   # Exit with a steady drain past the 5 s cap: the stop cuts it and reports the lines it cut.
   add_test(NAME logger_exit_capped COMMAND logger_exit_test capped)
+  # Exit in a fork child, and exit() on the LOG thread: the stop must not wait for a thread that
+  # is not there or is its own caller.
+  add_test(NAME logger_exit_fork COMMAND logger_exit_test fork)
+  add_test(NAME logger_exit_logexit COMMAND logger_exit_test logexit)
 
   # An exception logged on one thread and destroyed by it after the LOG thread wrote the line:
   # the line carries the description made at the call (TSan flags a LOG thread that touches it).
