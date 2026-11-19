@@ -43,6 +43,8 @@
 #include <condition_variable>   // for std::condition_variable
 #include <limits>          // for std::numeric_limits
 #include <mutex>           // for std::mutex, std::lock_guard
+#include <new>             // for placement new
+#include <pthread.h>       // for pthread_atfork
 #include <sstream>         // for std::ostringstream
 #include <system_error>   // for std::system_error
 #include <type_traits>    // for std::is_same_v, std::decay_t
@@ -1234,6 +1236,18 @@ class LogWorker : public Thread<LogWorker, ThreadPolicyType::logging> {
 
 	LogWorker() = default;
 
+	// In a fork child: the parent's LOG thread may have held `mtx`, or waited on `cv`, at the fork, and it
+	// is not in the child. Both guard no data (the state is atomics), so the child makes them anew and its
+	// wake_for() and end() never wait on a thread that is gone. It stores their initial bytes and calls no
+	// libc function, so it is safe in the child of a threaded process (docs/fork.md).
+	static inline LogWorker* forked_worker = nullptr;
+	static void after_fork_child() noexcept {
+		if (auto* w = forked_worker) {
+			new (&w->mtx) std::mutex;
+			new (&w->cv) std::condition_variable;
+		}
+	}
+
 public:
 	// The LOG thread, started on first use. It is never destroyed, so a line logged while statics are
 	// destroyed still finds it (stopped, so the line is written on the calling thread); at exit it is
@@ -1247,6 +1261,8 @@ public:
 #endif
 			(void)tick_stamps();
 			auto* w = new LogWorker;
+			forked_worker = w;
+			::pthread_atfork(nullptr, nullptr, &LogWorker::after_fork_child);
 			w->run();
 			return w;
 		}();
@@ -1442,6 +1458,9 @@ public:
 			worker_wake.store(until, std::memory_order_relaxed);
 			worker_state.fetch_or(kSleeping, std::memory_order_seq_cst);
 			std::atomic_thread_fence(std::memory_order_seq_cst);
+			if (auto* hook = sleep_hook.load(std::memory_order_relaxed)) [[unlikely]] {
+				hook();
+			}
 			if (earliest() >= until) {
 				auto awake = [&] { return (worker_state.load(std::memory_order_seq_cst) & (kSleeping | kStopping)) != kSleeping; };
 				if (until == std::numeric_limits<std::int64_t>::max()) {
