@@ -10,7 +10,7 @@
 #include <cstdlib>
 #include <memory>
 #include <mutex>
-#include <stdexcept>
+#include <exception>
 #include <string>
 #include <thread>
 #include <vector>
@@ -21,8 +21,16 @@
 
 namespace {
 
-struct Boom : std::runtime_error {
-	using std::runtime_error::runtime_error;
+// Two levels, both built here (instrumented): TSan counts a destructor's vptr store as a write only
+// when it changes the vptr, which ~Base does as it runs after ~Boom (as in Xapiand's exceptions).
+struct Base : std::exception {
+	std::string msg;
+	explicit Base(std::string m) : msg(std::move(m)) {}
+	const char* what() const noexcept override { return msg.c_str(); }
+	~Base() override = default;
+};
+struct Boom : Base {
+	using Base::Base;
 	~Boom() override = default;
 };
 
