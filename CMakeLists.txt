@@ -46,7 +46,7 @@ if(NOT DEFINED cppcodec_SOURCE_DIR)
 endif()
 
 # --- Library target ---
-add_library(logger STATIC logger.cc)
+add_library(logger STATIC logger.cc logger_timestamp.cc)
 target_include_directories(logger PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(logger PRIVATE "${cppcodec_SOURCE_DIR}")
 target_compile_features(logger PUBLIC cxx_std_20)
