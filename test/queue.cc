@@ -705,7 +705,7 @@ static void test_light_swap(int threads, int per) {
 // The child of the exit test: lines from several threads and from main, then return without finish().
 // Sized so the drain fits the exit-time stop's 5 s cap with room under a sanitizer and a loaded host
 // (TSan Debug drains about 0.3 ms a line alone).
-constexpr int kExitPer = 200, kExitMain = 100;
+constexpr int kExitPer = kThreadSanitizer ? 200 : 800, kExitMain = kThreadSanitizer ? 100 : 400;
 
 static int exit_child(const char* path) {
 	Logging::handlers.clear();

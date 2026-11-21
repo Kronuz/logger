@@ -1271,6 +1271,8 @@ public:
 				using std::chrono::steady_clock;
 				// A fork child has no LOG thread to wait for, and exit() on the LOG thread cannot wait for it.
 				if (::getpid() != worker->pid_ || std::this_thread::get_id() == worker->tid_.load(std::memory_order_acquire)) {
+					// Later lines are written inline, not queued where no thread will write them.
+					worker_state.fetch_or(kStopping, std::memory_order_seq_cst);
 					return;
 				}
 				worker->end(1);
