@@ -132,6 +132,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   # Exit in a fork child, and exit() on the LOG thread: the stop must not wait for a thread that
   # is not there or is its own caller.
   add_test(NAME logger_exit_fork COMMAND logger_exit_test fork)
+  add_test(NAME logger_exit_forklate COMMAND logger_exit_test forklate)
   add_test(NAME logger_exit_logexit COMMAND logger_exit_test logexit)
 
   # An exception logged on one thread and destroyed by it after the LOG thread wrote the line:

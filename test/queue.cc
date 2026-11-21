@@ -740,6 +740,7 @@ static void test_exit_flush() {
 	int fd = mkstemp(path);
 	CHECK(fd >= 0);
 	close(fd);
+	CHECK(kThreadSanitizer || 4 * kExitPer + kExitMain >= 3600);   // Release keeps the full volume
 	for (int round = 0; round < 3; ++round) {
 		std::remove(path);
 		std::string cmd = std::string("\"") + self + "\" exit " + path;

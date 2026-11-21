@@ -31,6 +31,9 @@
 // `child-fork`: a fork child of a process whose LOG thread runs logs a line and returns from main.
 // It has no LOG thread, so its exit must not wait for one; the parent kills it after 8 s.
 //
+// `child-fork-late`: a static destroyed in a fork child, after the exit-time stop skipped there, logs
+// as `child-late` does. Its lines must reach the child's stderr, not a queue no thread writes.
+//
 // `child-fork-held`: the same fork while the LOG thread holds its mutex, about to sleep (forced with
 // `logger_detail::sleep_hook`). The fork child logs a line and calls finish(), each of which locks that
 // mutex, and must exit within 5 s; the parent then writes every line it logs. test/fork_mutant.sh
@@ -45,6 +48,7 @@
 //        logger_exit_test slow     the parent: runs `child-slow` three times
 //        logger_exit_test capped   the parent: runs `child-capped` once, checking its stderr
 //        logger_exit_test fork     the parent: runs `child-fork` and `child-fork-held` once, within 10 s each
+//        logger_exit_test forklate the parent: runs `child-fork-late`, checking its stderr
 //        logger_exit_test logexit  the parent: runs `child-logexit` once, within 10 s
 //        logger_exit_test child | child-once | child-late | child-slow | child-capped | child-fork |
 //                         child-fork-held | child-logexit    (internal) a child
@@ -311,6 +315,32 @@ static int child_fork() {
 	return 0;
 }
 
+// child-fork-late: the fork child arms the late static, the parent does not.
+static int child_fork_late() {
+	Logging::handlers.clear();
+	Logging::add_handler(std::make_unique<MarkingLogger>());
+	Logging::hooks.describe_exception = DescribeHook{};
+	Logging::hooks.describe_exception.target<DescribeHook>()->armed = true;
+	Logging::config.color = LogColorMode::never;
+	Logging::config.log_level = LOG_INFO;
+	Logging::config.iterm2 = false;
+	L_INFO("first line");   // starts the LOG thread and registers its exit-time stop
+	for (int k = 0; k < 2000 && calls.load() < 1; ++k) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	CHECK(calls.load() == 1);
+	const pid_t pid = fork();
+	CHECK(pid >= 0);
+	if (pid == 0) {
+		late.armed = true;
+		return 0;
+	}
+	int st = 0;
+	waitpid(pid, &st, 0);
+	CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+	return 0;
+}
+
 // child-fork-held: counts the lines written, and those logged after the fork.
 static std::atomic<long> fork_written{0};
 static std::atomic<long> fork_after{0};
@@ -498,6 +528,9 @@ int main(int argc, char** argv) {
 	if (argc == 2 && std::strcmp(argv[1], "child-fork") == 0) {
 		return child_fork();
 	}
+	if (argc == 2 && std::strcmp(argv[1], "child-fork-late") == 0) {
+		return child_fork_late();
+	}
 	if (argc == 2 && std::strcmp(argv[1], "child-fork-held") == 0) {
 		return child_fork_held();
 	}
@@ -537,6 +570,23 @@ int main(int argc, char** argv) {
 		CHECK(cut > 0 && written >= 0 && cut + written == kCappedLines);
 		std::remove(err);
 		std::printf("exit with a drain past the cap OK: %ld lines written, %ld cut and reported\n", written, cut);
+		return 0;
+	}
+	if (argc == 2 && std::strcmp(argv[1], "forklate") == 0) {
+		const char* err = "logger_exit_forklate.err";
+		std::string cmd = std::string("\"") + argv[0] + "\" child-fork-late 2>" + err;
+		const int st = std::system(cmd.c_str());
+		const std::string text = read_file(err);
+		const bool routine = text.find("\nlate line from a static destructor\n") != std::string::npos;
+		const bool severe = text.find("\nlate severe line from a static destructor\n") != std::string::npos;
+		const bool exc = text.find("\nlate exception line: late boom\n") != std::string::npos;
+		if (st != 0 || !routine || !severe || !exc) {
+			std::fprintf(stderr, "the child's status is %d; its stderr:\n%s", st, text.c_str());
+		}
+		CHECK(st == 0);
+		CHECK(routine && severe && exc);
+		std::remove(err);
+		std::printf("a static logging in a fork child after the stop OK: its lines reach stderr\n");
 		return 0;
 	}
 	if (argc == 2 && std::strcmp(argv[1], "late") == 0) {
