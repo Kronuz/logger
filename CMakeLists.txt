@@ -8,7 +8,7 @@ include(FetchContent)
 FetchContent_Declare(
   wheel
   GIT_REPOSITORY https://github.com/Kronuz/wheel.git
-  GIT_TAG        bfd72bc13395e4a232701e752be97ccd236530fc
+  GIT_TAG        075a40a562cd7613b0b84d70f625b9671ca93285
 )
 FetchContent_MakeAvailable(wheel)
 
@@ -18,7 +18,7 @@ FetchContent_MakeAvailable(wheel)
 FetchContent_Declare(
   workpool
   GIT_REPOSITORY https://github.com/Kronuz/workpool.git
-  GIT_TAG        640c66bfebccae811377670a265b62f4878ede8a
+  GIT_TAG        bdf893212605a8d64f54b8cd7e9c19065ad56c10
 )
 FetchContent_MakeAvailable(workpool)
 
@@ -29,7 +29,7 @@ FetchContent_MakeAvailable(workpool)
 FetchContent_Declare(
   term_color
   GIT_REPOSITORY https://github.com/Kronuz/term-color.git
-  GIT_TAG        76a400be217eec6043510d5a812e368eb1898153
+  GIT_TAG        898710b4ddf2e9da0734f5c4d5aff112ad439fd9
 )
 FetchContent_MakeAvailable(term_color)
 
